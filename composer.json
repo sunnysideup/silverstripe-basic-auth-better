@@ -8,6 +8,7 @@
     "Basic Auth",
     "Authentication",
     "Login",
+    "Log-in",
     "Staging",
     "Stage",
     "Test",
@@ -38,10 +39,6 @@
   },
   "minimum-stability": "dev",
   "prefer-stable": true,
-  "bin": [
-    "bin/npm-build-basic-auth-better.sh",
-    "bin/npm-watch-basic-auth-better.sh"
-  ],
   "authors": [
     {
       "name": "Nicolaas Thiemen Francken",
