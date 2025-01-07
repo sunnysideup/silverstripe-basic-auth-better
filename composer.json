@@ -11,8 +11,8 @@
     "Log-in",
     "Staging",
     "Stage",
-    "Test",
-    "Testing"
+    "Pre-Production",
+    "Test Site"
   ],
   "license": "BSD-3-Clause",
   "require": {
