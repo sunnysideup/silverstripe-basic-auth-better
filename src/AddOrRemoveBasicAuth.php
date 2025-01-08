@@ -29,6 +29,8 @@ class AddOrRemoveBasicAuth implements Flushable
         'Require valid-user',
     ];
 
+    private static $debug = false;
+
     private bool $needsProtection;
     private ?string $userName;
     private ?string $password;
@@ -144,6 +146,8 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private function logMessage(string $message): void
     {
-        DB::alteration_message($message, 'edited');
+        if ($this->config()->debug) {
+            DB::alteration_message($message, 'edited');
+        }
     }
 }
