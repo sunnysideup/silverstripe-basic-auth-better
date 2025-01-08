@@ -75,7 +75,13 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private function checkBasicAuthConfig(): void
     {
-        if (!Director::isLive() && Config::inst()->get(BasicAuth::class, 'entire_site_protected')) {
+        if (
+            !Director::isLive() &&
+            (
+                Config::inst()->get(BasicAuth::class, 'entire_site_protected') ||
+                Environment::getEnv('SS_USE_BASIC_AUTH')
+            )
+        ) {
             user_error(
                 'BasicAuth is enabled in the config.
                 Remove the BasicAuth::protect_entire_site() call from your _config.php file
