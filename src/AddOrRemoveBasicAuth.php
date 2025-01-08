@@ -85,7 +85,8 @@ class AddOrRemoveBasicAuth implements Flushable
             user_error(
                 'BasicAuth is enabled in the config.
                 Remove the BasicAuth::protect_entire_site() call from your _config.php file
-                or set ' . BasicAuth::class . ':entire_site_protected: false',
+                or set ' . BasicAuth::class . ':entire_site_protected: false
+                and make sure that in your .env file, you do not have SS_USE_BASIC_AUTH set to true.',
                 E_USER_WARNING
             );
         }
