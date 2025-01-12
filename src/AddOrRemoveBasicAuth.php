@@ -102,8 +102,8 @@ class AddOrRemoveBasicAuth implements Flushable
     private function deleteHtpasswdFile(): void
     {
         if (file_exists($this->htpasswdPath)) {
-            unlink($this->htpasswdPath);
-            $this->logMessage('.htpasswd file removed.');
+            // unlink($this->htpasswdPath);
+            // $this->logMessage('.htpasswd file removed.');
         }
     }
     private function updateHtaccessFiles(): void
