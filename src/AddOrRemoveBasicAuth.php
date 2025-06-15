@@ -48,7 +48,7 @@ class AddOrRemoveBasicAuth implements Flushable
     private function initialize(): void
     {
         $this->needsProtection = Director::isTest();
-        $this->userName = Environment::getEnv('SS_BASIC_AUTH_USER');
+        $this->userName = Environment::getEnv('SS_BASIC_AUTH_USER') ?: Environment::getEnv('SS_BASIC_AUTH_USERNAME');
         $this->password = Environment::getEnv('SS_BASIC_AUTH_PASSWORD');
         $this->base = Director::baseFolder();
         $this->htpasswdPath = $this->base . '/.htpasswd';
@@ -58,9 +58,7 @@ class AddOrRemoveBasicAuth implements Flushable
         foreach ($this->config()->htaccess_files as $htaccessFile) {
             $this->htaccessPaths[] = $this->base . '/' . $htaccessFile;
         }
-        if ($this->needsProtection && ($this->userName && $this->password)) {
-            // all is good in the hood
-        } else {
+        if ($this->needsProtection && (!$this->userName || !$this->password)) {
             user_error(
                 '
 
@@ -111,7 +109,13 @@ and make sure that in your .env file, you do not have SS_USE_BASIC_AUTH set to t
 
     private function createHtpasswdFile(): void
     {
-        $hashedPassword = password_hash($this->password, PASSWORD_BCRYPT);
+        $hashedPassword = $this->userName . ':' . password_hash($this->password, PASSWORD_BCRYPT);
+        if (!password_verify($this->password, password_hash($this->password, PASSWORD_BCRYPT))) {
+            user_error(
+                'The password provided for BasicAuth is not valid. Please check your .env file.',
+                E_USER_ERROR
+            );
+        }
         file_put_contents($this->htpasswdPath, $hashedPassword . PHP_EOL);
         $this->logMessage('.htpasswd file created.');
     }
