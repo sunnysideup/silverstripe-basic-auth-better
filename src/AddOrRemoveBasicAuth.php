@@ -109,7 +109,7 @@ and make sure that in your .env file, you do not have SS_USE_BASIC_AUTH set to t
 
     private function createHtpasswdFile(): void
     {
-        $hashedPassword = $this->userName . ':' . password_hash($this->password, PASSWORD_BCRYPT);
+        $hashedPassword = password_hash($this->password, PASSWORD_BCRYPT);
         file_put_contents($this->htpasswdPath, $hashedPassword . PHP_EOL);
         $this->logMessage('.htpasswd file created.');
     }
