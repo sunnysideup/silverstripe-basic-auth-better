@@ -58,7 +58,9 @@ class AddOrRemoveBasicAuth implements Flushable
         foreach ($this->config()->htaccess_files as $htaccessFile) {
             $this->htaccessPaths[] = $this->base . '/' . $htaccessFile;
         }
-        if ($this->needsProtection && (!$this->userName && !$this->password)) {
+        if ($this->needsProtection && ($this->userName && $this->password)) {
+            // all is good in the hood
+        } else {
             user_error(
                 '
 
