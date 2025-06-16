@@ -48,13 +48,15 @@ class AddOrRemoveBasicAuth implements Flushable
     private function initialize(): void
     {
         $this->needsProtection = Director::isTest();
-        $this->userName = Environment::getEnv('SS_BASIC_AUTH_USER') ?: Environment::getEnv('SS_BASIC_AUTH_USERNAME');
-        $this->password = Environment::getEnv('SS_BASIC_AUTH_PASSWORD');
+        $this->userName = (string) Environment::getEnv('SS_BASIC_AUTH_USER') ?: Environment::getEnv('SS_BASIC_AUTH_USERNAME');
+        $this->password = (string) Environment::getEnv('SS_BASIC_AUTH_PASSWORD');
         $this->base = Director::baseFolder();
         $this->htpasswdPath = $this->base . '/.htpasswd';
         if ($this->userName && !$this->password) {
             $this->needsProtection = false;
         }
+        // make sure the variable is initialized
+        $this->htaccessPaths = [];
         foreach ($this->config()->htaccess_files as $htaccessFile) {
             $this->htaccessPaths[] = $this->base . '/' . $htaccessFile;
         }
