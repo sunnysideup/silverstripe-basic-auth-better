@@ -1,1 +1,13 @@
+Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
+  excluded_hosts:
+    - mysite.co.nz
 
+    htaccess_files:
+       - 'public/.htaccess'
+       - 'public/assets/.htaccess'
+
+    htaccess_lines:
+        - 'foo'
+
+    default_user_name: 'authorisedusers' # better to set this in .env file!
+    default_password: 'only' # better to set this in .env file!

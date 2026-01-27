@@ -7,6 +7,14 @@ SS_BASIC_AUTH_USER=foo
 SS_BASIC_AUTH_PASSWORD=bar
 ```
 
+Add to your yml files:
+
+```yml
+Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
+  excluded_hosts:
+    - mysite.co.nz
+```
+
 Then just run ?flush=all
 
 If your site is in `test` mode (Director::isTest()), password protection will be added.
@@ -24,3 +32,5 @@ If you do not want to use it, you can set:
 SS_BASIC_AUTH_USER="anything"
 SS_BASIC_AUTH_PASSWORD=""
 ```
+
+or use the yml option above.

@@ -17,21 +17,38 @@ class AddOrRemoveBasicAuth implements Flushable
     use Injectable;
     use Configurable;
 
+    private const START_MARKER = '# START BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
+    private const END_MARKER = '# END BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
+    private const HTPASSWD_PATH_MARKER = '# HTPASSWD PATH HERE';
+    private const ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
+
+    private static array $excluded_hosts = [];
+
     private static $htaccess_files = [
         'public/.htaccess',
         'public/assets/.htaccess',
     ];
 
     private static $htaccess_lines = [
-        'AuthUserFile ',
+        self::HTPASSWD_PATH_MARKER,
         'AuthType Basic',
         'AuthName "Please enter your website username and password to access this site."',
-        'Require valid-user',
+        '<RequireAny>',
+        '    # Excluded hosts (no login)',
+        self::ADD_HOSTS_MARKER,
+        '',
+        '    # All other hosts: require login',
+        '    Require valid-user',
+        '</RequireAny>',
+
     ];
+
+    private static string $default_user_name = 'authorisedusers';
+    private static string $default_password = 'only';
 
     private static $debug = false;
 
-    private bool $needsProtection;
+    private bool $needsProtection = true; // should always be true!
     private ?string $userName;
     private ?string $password;
     private string $base;
@@ -47,14 +64,11 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private function initialize(): void
     {
-        $this->needsProtection = Director::isTest();
-        $this->userName = (string) Environment::getEnv('SS_BASIC_AUTH_USER') ?: Environment::getEnv('SS_BASIC_AUTH_USERNAME');
-        $this->password = (string) Environment::getEnv('SS_BASIC_AUTH_PASSWORD');
+        $this->userName = (string) Environment::getEnv('SS_BASIC_AUTH_USER') ?: Environment::getEnv('SS_BASIC_AUTH_USERNAME') ?: $this->config()->default_user_name;
+        $this->password = (string) Environment::getEnv('SS_BASIC_AUTH_PASSWORD') ?: $this->config()->default_password;
         $this->base = Director::baseFolder();
         $this->htpasswdPath = $this->base . '/.htpasswd';
-        if ($this->userName && !$this->password) {
-            $this->needsProtection = false;
-        }
+
         // make sure the variable is initialized
         $this->htaccessPaths = [];
         foreach ($this->config()->htaccess_files as $htaccessFile) {
@@ -82,8 +96,10 @@ To turn this off, you can just set SS_BASIC_AUTH_USER and no SS_BASIC_AUTH_PASSW
         } else {
             $this->deleteHtpasswdFile();
         }
-
-        $this->updateHtaccessFiles();
+        if (Director::isDev()) {
+            // in dev mode, we always update the htaccess files
+            $this->updateHtaccessFiles();
+        }
     }
 
     private function checkBasicAuthConfig(): void
@@ -111,14 +127,17 @@ and make sure that in your .env file, you do not have SS_USE_BASIC_AUTH set to t
 
     private function createHtpasswdFile(): void
     {
-        $hashedPassword = $this->userName . ':' . password_hash($this->password, PASSWORD_BCRYPT);
-        if (!password_verify($this->password, password_hash($this->password, PASSWORD_BCRYPT))) {
+        $hash = password_hash($this->password ?? '', PASSWORD_BCRYPT);
+        if ($hash === false) {
             user_error(
-                'The password provided for BasicAuth is not valid. Please check your .env file.',
+                'Could not hash BasicAuth password. Please check your .env file.',
                 E_USER_ERROR
             );
         }
-        file_put_contents($this->htpasswdPath, $hashedPassword . PHP_EOL);
+
+        $line = $this->userName . ':' . $hash . PHP_EOL;
+
+        file_put_contents($this->htpasswdPath, $line, LOCK_EX);
         $this->logMessage('.htpasswd file created.');
     }
 
@@ -131,21 +150,38 @@ and make sure that in your .env file, you do not have SS_USE_BASIC_AUTH set to t
     }
     private function updateHtaccessFiles(): void
     {
-        $startMarker = PHP_EOL . PHP_EOL . '# START_BASIC_AUTH';
-        $endMarker = '# END_BASIC_AUTH' . PHP_EOL . PHP_EOL;
+        $startMarker = PHP_EOL . PHP_EOL . self::START_MARKER;
+        $endMarker = self::END_MARKER . PHP_EOL . PHP_EOL;
 
         $authDirectives = $this->config()->htaccess_lines;
-        $authDirectives[0] .= ' ' . $this->htpasswdPath;
+        foreach ($authDirectives as $index => $line) {
+            if (trim($line) === self::HTPASSWD_PATH_MARKER) {
+                $authDirectives[$index] = 'AuthUserFile ' . $this->htpasswdPath;
+            } elseif (trim($line) === self::ADD_HOSTS_MARKER) {
+                $excludedHostsLines = [];
+                $excludedHosts = Config::inst()->get(BasicAuth::class, 'excluded_hosts') ?: [];
+
+                foreach ($excludedHosts as $host) {
+                    $host = trim((string) $host);
+                    if ($host === '') {
+                        continue;
+                    }
+
+                    $excludedHostsLines[] =
+                        '    Require expr %{HTTP_HOST} == \'' . str_replace('\'', '\\\'', $host) . '\'';
+                }
+
+                array_splice($authDirectives, $index, 1, $excludedHostsLines);
+            }
+        }
 
         // Combine directives with markers
         $authBlock = implode(PHP_EOL, array_merge([$startMarker], $authDirectives, [$endMarker]));
 
         foreach ($this->htaccessPaths as $htaccessPath) {
             if (!file_exists($htaccessPath)) {
-                if ($this->needsProtection) {
-                    file_put_contents($htaccessPath, PHP_EOL . $authBlock . PHP_EOL, FILE_APPEND);
-                    $this->logMessage('.htaccess file created: ' . $htaccessPath);
-                }
+                file_put_contents($htaccessPath, PHP_EOL . $authBlock . PHP_EOL, FILE_APPEND);
+                $this->logMessage('.htaccess file created: ' . $htaccessPath);
                 continue;
             }
 
@@ -172,7 +208,6 @@ and make sure that in your .env file, you do not have SS_USE_BASIC_AUTH set to t
             }
         }
     }
-
 
     private function logMessage(string $message): void
     {
