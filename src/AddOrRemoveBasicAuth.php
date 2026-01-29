@@ -52,6 +52,17 @@ class AddOrRemoveBasicAuth implements Flushable
     ];
 
     /**
+     * Sub-domains that are considered legit.
+     *
+     * @var array<int, string>
+     */
+    private static array $legit_sub_domains = [
+        'test',
+        'dev',
+        'staging',
+    ];
+
+    /**
      * Optional: additional legit hosts (won't canonical-redirect).
      *
      * @var array<int, string>
@@ -105,7 +116,7 @@ class AddOrRemoveBasicAuth implements Flushable
     private static bool $debug = false;
     private static bool $disabled = false;
 
-    private bool $needsProtection = true; // should always be true!
+    private bool $needsProtection = true;
 
     private string $userName = '';
     private string $password = '';
@@ -119,68 +130,35 @@ class AddOrRemoveBasicAuth implements Flushable
 
     public static function flush(): void
     {
-        if ((bool) Config::inst()->get(self::class, 'disabled')) {
-            return;
-        }
-
-        /** @var AddOrRemoveBasicAuth $instance */
-        $instance = Injector::inst()->get(self::class);
+        /** @var self $instance */
+        $instance = Injector::inst()->get(static::class);
         $instance->initialize();
         $instance->process();
     }
 
     public function initialize(): void
     {
-        $this->needsProtection = Director::isTest();
-        $this->userName = $this->firstEnvValue([
-            'SS_BASIC_AUTH_USER',
-            'SS_BASIC_AUTH_USERNAME',
-        ]);
-
-        if ($this->userName === '') {
-            $this->userName = (string) $this->config()->get('default_user_name');
-        }
-
-        $this->password = $this->firstEnvValue([
-            'SS_BASIC_AUTH_PASSWORD',
-        ]);
-
-        if ($this->password === '') {
-            $this->password = (string) $this->config()->get('default_password');
-        }
-
         $this->base = Director::baseFolder();
-        if ($this->config()->get('htpasswd_path')) {
-            $this->htpasswdPath = (string) $this->config()->get('htpasswd_path') . '/.htpasswd';
-        } else {
-            $this->htpasswdPath = $this->base . '/.htpasswd';
-        }
+        $this->htpasswdPath = $this->resolveHtpasswdPath();
+        $this->htaccessPaths = $this->resolveHtaccessPaths();
 
-        $this->htaccessPaths = [];
-        $htaccessFiles = (array) $this->config()->get('htaccess_files');
-
-        foreach ($htaccessFiles as $htaccessFile) {
-            $this->htaccessPaths[] = $this->base . '/' . ltrim((string) $htaccessFile, '/');
-        }
-
-        if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
-            user_error(
-                "\n\nPlease set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.\n",
-                E_USER_ERROR
-            );
-        }
-
-        $liveSiteHost = $this->normaliseHost((string) $this->config()->get('canonical_url'));
-        if ($liveSiteHost === '') {
-            user_error(
-                "\n\nPlease set " . self::class . ":canonical_url (e.g. mysite.co.nz) in YAML config.\n",
-                E_USER_ERROR
-            );
-        }
+        // Keep your original behaviour (only protect in SS 'test' env).
+        // If you actually meant "non-live", change this to: !Director::isLive()
+        $this->needsProtection = Director::isTest();
     }
 
     public function process(): void
     {
+        $disabled = (bool) Config::inst()->get(self::class, 'disabled');
+
+        if ($disabled) {
+            $this->deleteHtpasswdFile();
+            if (Director::isDev()) {
+                $this->updateHtaccessFiles(true);
+            }
+            return;
+        }
+
         $this->checkBasicAuthConfig();
 
         if ($this->needsProtection) {
@@ -189,22 +167,56 @@ class AddOrRemoveBasicAuth implements Flushable
             $this->deleteHtpasswdFile();
         }
 
-        $this->updateHtaccessFiles();
+        if (Director::isDev()) {
+            $this->updateHtaccessFiles(false);
+        }
+    }
+
+    private function resolveHtpasswdPath(): string
+    {
+        $configured = (string) $this->config()->get('htpasswd_path');
+
+        if ($configured !== '') {
+            return rtrim($configured, '/') . '/.htpasswd';
+        }
+
+        return rtrim(Director::baseFolder(), '/') . '/.htpasswd';
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function resolveHtaccessPaths(): array
+    {
+        $paths = [];
+
+        foreach ((array) $this->config()->get('htaccess_files') as $file) {
+            $paths[] = rtrim($this->base, '/') . '/' . ltrim((string) $file, '/');
+        }
+
+        return $paths;
     }
 
     public function checkBasicAuthConfig(): void
     {
-        $entireSiteProtected = (bool) Config::inst()->get(BasicAuth::class, 'entire_site_protected');
-        $envUsesBasicAuth = $this->isEnvTruthy('SS_USE_BASIC_AUTH');
+        if ($this->needsProtection) {
+            $entireSiteProtected = (bool) Config::inst()->get(BasicAuth::class, 'entire_site_protected');
+            $envUsesBasicAuth = $this->isEnvTruthy('SS_USE_BASIC_AUTH');
 
-        if ($this->needsProtection && ($entireSiteProtected || $envUsesBasicAuth)) {
-            user_error(
-                "\n\nBasicAuth is enabled elsewhere.\n"
-                    . "Remove the BasicAuth::protect_entire_site() call from your _config.php\n"
-                    . "or set " . BasicAuth::class . ".entire_site_protected: false\n"
-                    . "and make sure SS_USE_BASIC_AUTH is not truthy in .env.\n\n",
-                E_USER_WARNING
-            );
+            if ($entireSiteProtected || $envUsesBasicAuth) {
+                $message = implode(PHP_EOL, [
+                    '',
+                    '',
+                    'BasicAuth is enabled elsewhere.',
+                    'Remove the BasicAuth::protect_entire_site() call from your _config.php',
+                    'or set ' . BasicAuth::class . '.entire_site_protected: false',
+                    'and make sure SS_USE_BASIC_AUTH is not truthy in .env.',
+                    '',
+                    '',
+                ]);
+
+                user_error($message, E_USER_WARNING);
+            }
         }
     }
 
@@ -214,6 +226,21 @@ class AddOrRemoveBasicAuth implements Flushable
             $this->logMessage('BasicAuth disabled - in Dev mode - no .htpasswd file created.');
             return;
         }
+
+        $this->userName = $this->firstEnvValue(['SS_BASIC_AUTH_USER', 'SS_BASIC_AUTH_USERNAME']);
+        if ($this->userName === '') {
+            $this->userName = (string) $this->config()->get('default_user_name');
+        }
+
+        $this->password = $this->firstEnvValue(['SS_BASIC_AUTH_PASSWORD']);
+        if ($this->password === '') {
+            $this->password = (string) $this->config()->get('default_password');
+        }
+
+        if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
+            user_error(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL, E_USER_ERROR);
+        }
+
         $hash = password_hash($this->password, PASSWORD_BCRYPT);
         if ($hash === false) {
             user_error('Could not hash BasicAuth password. Please check your .env file.', E_USER_ERROR);
@@ -233,96 +260,83 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private function deleteHtpasswdFile(): void
     {
-        if (file_exists($this->htpasswdPath)) {
+        if ($this->htpasswdPath !== '' && file_exists($this->htpasswdPath)) {
             @unlink($this->htpasswdPath);
             $this->logMessage('.htpasswd file removed.');
         }
     }
 
-    private function updateHtaccessFiles(): void
+    private function updateHtaccessFiles(bool $removeBlock): void
     {
-        $authDirectives = $this->buildHtaccessDirectiveLines();
+        $liveSiteHost = $this->normaliseHost((string) $this->config()->get('canonical_url'));
+        if ($liveSiteHost === '') {
+            user_error(
+                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config.' . PHP_EOL,
+                E_USER_ERROR
+            );
+        }
 
-        $authBlock =
-            self::START_MARKER . PHP_EOL
+        $authDirectives = $this->buildHtaccessDirectiveLines($liveSiteHost);
+
+        $authBlock = self::START_MARKER . PHP_EOL
             . implode(PHP_EOL, $authDirectives) . PHP_EOL
             . self::END_MARKER . PHP_EOL;
 
-        $pattern =
-            '/^' . preg_quote(self::START_MARKER, '/') .
-            '.*?^' . preg_quote(self::END_MARKER, '/') .
-            '\R?/ms';
+        $pattern = '/^' . preg_quote(self::START_MARKER, '/') . '.*?^' . preg_quote(self::END_MARKER, '/') . '\R?/ms';
 
         foreach ($this->htaccessPaths as $htaccessPath) {
-            $existingContent = file_exists($htaccessPath) ? (string) file_get_contents($htaccessPath) : '';
+            $existing = file_exists($htaccessPath) ? (string) file_get_contents($htaccessPath) : '';
 
-            if ((bool) Config::inst()->get(self::class, 'disabled')) {
-                if ($existingContent === '') {
-                    continue;
-                }
-
-                $updatedContent = (string) (preg_replace($pattern, '', $existingContent) ?? $existingContent);
-
-                $result = @file_put_contents($htaccessPath, $updatedContent, LOCK_EX);
-                if ($result === false) {
-                    user_error('Could not write .htaccess file at: ' . $htaccessPath, E_USER_WARNING);
-                    continue;
-                }
-
-                $this->logMessage('BasicAuth protection removed from: ' . $htaccessPath);
-            } else {
-
-                $updatedContent = str_contains($existingContent, self::START_MARKER)
-                    ? ((string) (preg_replace($pattern, $authBlock, $existingContent) ?? $existingContent))
-                    : ($authBlock . $existingContent);
-
-                $result = @file_put_contents($htaccessPath, $updatedContent, LOCK_EX);
-                if ($result === false) {
-                    user_error('Could not write .htaccess file at: ' . $htaccessPath, E_USER_WARNING);
-                    continue;
-                }
-
-                $this->logMessage('BasicAuth protection ensured in: ' . $htaccessPath);
+            if ($existing === '' && $removeBlock) {
+                continue;
             }
+
+            $updated = $removeBlock
+                ? ((string) (preg_replace($pattern, '', $existing) ?? $existing))
+                : (str_contains($existing, self::START_MARKER)
+                    ? ((string) (preg_replace($pattern, $authBlock, $existing) ?? $existing))
+                    : ($authBlock . $existing));
+
+            $result = @file_put_contents($htaccessPath, $updated, LOCK_EX);
+            if ($result === false) {
+                user_error('Could not write .htaccess file at: ' . $htaccessPath, E_USER_WARNING);
+                continue;
+            }
+
+            $this->logMessage(
+                ($removeBlock ? 'BasicAuth protection removed from: ' : 'BasicAuth protection ensured in: ')
+                    . $htaccessPath
+            );
         }
     }
 
-
-    private function normaliseList(array $values, callable $normaliser): array
-    {
-        $values = array_map($normaliser, $values);
-        $values = array_filter($values);           // removes '' (and other falsey)
-        $values = array_unique($values);           // keeps first occurrence
-        return array_values($values);              // reindex
-    }
     /**
      * @return array<int, string>
      */
-    private function buildHtaccessDirectiveLines(): array
+    private function buildHtaccessDirectiveLines(string $liveSiteHost): array
     {
         $templateLines = (array) $this->config()->get('htaccess_lines');
 
-        $liveSiteHost = $this->normaliseHost((string) $this->config()->get('canonical_url'));
-
         $excludedHosts = $this->normaliseList(
             array_merge([$liveSiteHost], (array) $this->config()->get('excluded_from_basic_auth_hosts')),
-            fn(mixed $host): string => $this->normaliseHost((string) $host)
+            fn(string $host): string => $this->normaliseHost($host)
         );
 
-        $devExclusions = $this->normaliseList(
-            (array) $this->config()->get('dev_exclusions'),
-            fn(mixed $suffix): string => trim((string) $suffix)
-        );
+        $devExclusions = $this->normaliseList((array) $this->config()->get('dev_exclusions'));
 
-        $additionalLegitSites = $this->normaliseList(
-            (array) $this->config()->get('legit_sites'),
-            fn(mixed $host): string => $this->normaliseHost((string) $host)
-        );
+        $legitSites = [];
+        foreach ((array) $this->config()->get('legit_sub_domains') as $subDomain) {
+            $subDomainString = trim((string) $subDomain);
+            if ($subDomainString !== '') {
+                $legitSites[] = $subDomainString . '.' . $liveSiteHost;
+            }
+        }
 
         $legitHosts = $this->normaliseList(
-            array_merge($excludedHosts, $additionalLegitSites),
-            fn(mixed $host): string => (string) $host
+            array_merge($excludedHosts, $legitSites, (array) $this->config()->get('legit_sites')),
+            fn(string $host): string => $this->normaliseHost($host)
         );
+
         $devExclusionsRegex = $this->buildSuffixRegexForRewriteCond($devExclusions);
         $legitSitesRegex = $this->buildExactHostsRegex($legitHosts);
 
@@ -330,14 +344,14 @@ class AddOrRemoveBasicAuth implements Flushable
 
         foreach ($templateLines as $line) {
             $lineString = (string) $line;
-            $trimmedLine = trim($lineString);
+            $trimmed = trim($lineString);
 
-            if ($trimmedLine === self::HTPASSWD_PATH_MARKER) {
+            if ($trimmed === self::HTPASSWD_PATH_MARKER) {
                 $outputLines[] = 'AuthUserFile ' . $this->htpasswdPath;
                 continue;
             }
 
-            if ($trimmedLine === self::ADD_HOSTS_MARKER) {
+            if ($trimmed === self::ADD_HOSTS_MARKER) {
                 foreach ($excludedHosts as $host) {
                     $safeHost = str_replace('\'', '\\\'', strtolower($host));
                     $outputLines[] = '  Require expr tolower(%{HTTP_HOST}) == \'' . $safeHost . '\'';
@@ -363,6 +377,36 @@ class AddOrRemoveBasicAuth implements Flushable
         return $outputLines;
     }
 
+    /**
+     * @param array<int, mixed> $values
+     * @return array<int, string>
+     */
+    private function normaliseList(array $values, ?callable $normaliser = null): array
+    {
+        $out = [];
+
+        foreach ($values as $value) {
+            $valueString = trim((string) $value);
+            if ($valueString === '') {
+                continue;
+            }
+
+            if ($normaliser !== null) {
+                $valueString = trim((string) $normaliser($valueString));
+                if ($valueString === '') {
+                    continue;
+                }
+            }
+
+            $out[] = $valueString;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * @param array<int, string> $suffixes
+     */
     private function buildSuffixRegexForRewriteCond(array $suffixes): string
     {
         if ($suffixes === []) {
@@ -377,6 +421,9 @@ class AddOrRemoveBasicAuth implements Flushable
         return '(' . implode('|', $escaped) . ')$';
     }
 
+    /**
+     * @param array<int, string> $hosts
+     */
     private function buildExactHostsRegex(array $hosts): string
     {
         if ($hosts === []) {
@@ -391,19 +438,22 @@ class AddOrRemoveBasicAuth implements Flushable
         return implode('|', $escaped);
     }
 
+    /**
+     * @param array<int, string> $lines
+     */
     private function assertNoMarkersRemain(array $lines): void
     {
-        $joined = implode("\n", $lines);
+        $joined = implode(PHP_EOL, $lines);
 
-        $markers = [
-            self::HTPASSWD_PATH_MARKER,
-            self::ADD_HOSTS_MARKER,
-            self::DEV_EXCLUSIONS_MARKER,
-            self::LIST_OF_LEGIT_SITES_MARKER,
-            self::LIVE_SITE_HOST_MARKER,
-        ];
-
-        foreach ($markers as $marker) {
+        foreach (
+            [
+                self::HTPASSWD_PATH_MARKER,
+                self::ADD_HOSTS_MARKER,
+                self::DEV_EXCLUSIONS_MARKER,
+                self::LIST_OF_LEGIT_SITES_MARKER,
+                self::LIVE_SITE_HOST_MARKER,
+            ] as $marker
+        ) {
             if (str_contains($joined, $marker)) {
                 user_error('Unreplaced .htaccess marker found: ' . $marker, E_USER_ERROR);
             }
@@ -423,11 +473,13 @@ class AddOrRemoveBasicAuth implements Flushable
         return strtolower(trim($host));
     }
 
+    /**
+     * @param array<int, string> $keys
+     */
     private function firstEnvValue(array $keys): string
     {
         foreach ($keys as $key) {
-            $value = (string) Environment::getEnv((string) $key);
-            $value = trim($value);
+            $value = trim((string) Environment::getEnv($key));
             if ($value !== '') {
                 return $value;
             }
@@ -449,6 +501,7 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $bool = filter_var($valueString, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
         return $bool ?? true;
     }
 

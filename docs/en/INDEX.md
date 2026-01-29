@@ -12,7 +12,7 @@ Add to your yml files:
 ```yml
 Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
     # must set!
-    canonical_url: 'mysite.co.nz'
+    canonical_url: 'mysite.co.nz' # this is the live site - check if it uses www by default?!
     htpasswd_path: '/container/application'
 
     # nice to set, but can also use .env file - which is better but more work...
@@ -21,14 +21,16 @@ Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
 
     # optional
     excluded_from_basic_auth_hosts:
-        - mysite.co.nz
-        
+        - alsolive.mysite.co.nz
+
     # only change if you really have to!
     htaccess_files:
         - 'public/.htaccess'
         - 'public/assets/.htaccess'
     htaccess_lines:
         - 'foo'
+
+
 
 
 ```
