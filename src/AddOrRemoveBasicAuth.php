@@ -48,7 +48,7 @@ class AddOrRemoveBasicAuth implements Flushable
     private static array $dev_exclusions = [
         '.localhost',
         '.ss4',
-        '.ddev',
+        '.ddev.site',
     ];
 
     /**
