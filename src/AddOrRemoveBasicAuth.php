@@ -383,6 +383,7 @@ class AddOrRemoveBasicAuth implements Flushable
             }
 
             if ($trimmed === self::ADD_HOSTS_MARKER) {
+                $excludedHosts[] = $this->wwwVsNonWww($liveSiteHost);
                 foreach ($excludedHosts as $host) {
                     $safeHost = str_replace('\'', '\\\'', strtolower($host));
                     $outputLines[] = '  Require expr tolower(%{HTTP_HOST}) == \'' . $safeHost . '\'';
@@ -534,6 +535,16 @@ class AddOrRemoveBasicAuth implements Flushable
         $bool = filter_var($valueString, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
 
         return $bool ?? true;
+    }
+
+    private function wwwVsNonWww(string $host): string
+    {
+        $host = trim($host);
+        if (str_starts_with(strtolower($host), 'www.')) {
+            return substr($host, 4);
+        }
+
+        return 'www.' . $host;
     }
 
     private function logMessage(string $message): void
