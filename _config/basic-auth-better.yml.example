@@ -2,6 +2,11 @@ Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
     # must set!
     canonical_url: 'mysite.co.nz' # this is the live site - check if it uses www by default?!
     htpasswd_path: '/container/application'
+    legit_sub_domains:
+        - dev
+        - staging
+        - test
+
 
     # nice to set, but can also use .env file - which is better but more work...
     default_user_name: 'authorisedusers' # better to set this in .env file!
@@ -17,4 +22,5 @@ Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
         - 'public/assets/.htaccess'
     htaccess_lines:
         - 'foo'
+
 

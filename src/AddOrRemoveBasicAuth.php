@@ -28,6 +28,8 @@ class AddOrRemoveBasicAuth implements Flushable
     private const LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
     private const LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
 
+    private static string $htpasswd_path = '/var/www/html';
+
     /**
      * e.g. mysite.co.nz (without https!)
      */
@@ -56,11 +58,7 @@ class AddOrRemoveBasicAuth implements Flushable
      *
      * @var array<int, string>
      */
-    private static array $legit_sub_domains = [
-        'test',
-        'dev',
-        'staging',
-    ];
+    private static array $legit_sub_domains = [];
 
     /**
      * Optional: additional legit hosts (won't canonical-redirect).
@@ -81,8 +79,24 @@ class AddOrRemoveBasicAuth implements Flushable
      * @var array<int, string>
      */
     private static array $htaccess_lines = [
-        'Header always set X-Content-Type-Options "nosniff"',
+        '# Force HTTPS in browsers (HSTS) — ONLY if https works for all subdomains',
+        'Header always set Strict-Transport-Security "max-age=31536000; preload"',
+        '',
+        '# Better privacy default than same-origin for most sites',
+        'Header always set Referrer-Policy "strict-origin-when-cross-origin"',
+        '',
+        '# Clickjacking protection (modern)',
+        'Header always set Content-Security-Policy "frame-ancestors \'self\'"',
+        '',
+        '# (Optional legacy fallback for old browsers)',
         'Header always set X-Frame-Options "SAMEORIGIN"',
+        '',
+        '# Modern replacement for Feature-Policy',
+        'Header always set Permissions-Policy "camera=(), microphone=()"',
+        '',
+        '# Baseline hardening',
+        'Header always set X-Content-Type-Options "nosniff"',
+        '',
         'RewriteEngine On',
         'SetEnv HTTP_MOD_REWRITE On',
         '',
@@ -356,10 +370,15 @@ class AddOrRemoveBasicAuth implements Flushable
         $devExclusions = $this->normaliseList((array) $this->config()->get('dev_exclusions'));
 
         $legitSites = [];
+        if (str_starts_with($liveSiteHost, 'www')) {
+            $liveHostWithoutWWW = preg_replace('/^www\./i', '', $liveSiteHost) ?? $liveSiteHost;
+        } else {
+            $liveHostWithoutWWW = $liveSiteHost;
+        }
         foreach ((array) $this->config()->get('legit_sub_domains') as $subDomain) {
             $subDomainString = trim((string) $subDomain);
             if ($subDomainString !== '') {
-                $legitSites[] = $subDomainString . '.' . $liveSiteHost;
+                $legitSites[] = $subDomainString . '.' . $liveHostWithoutWWW;
             }
         }
 
