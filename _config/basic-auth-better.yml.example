@@ -6,6 +6,8 @@ Sunnysideup\BasicAuthBetter\AddOrRemoveBasicAuth:
         - dev
         - staging
         - test
+    legit_sites:
+        - mysite.test.com
 
 
     # nice to set, but can also use .env file - which is better but more work...
