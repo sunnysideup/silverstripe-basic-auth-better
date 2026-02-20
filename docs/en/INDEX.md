@@ -54,3 +54,25 @@ SS_BASIC_AUTH_PASSWORD=""
 ```
 
 or use the yml options above.
+
+## Also set
+
+```yml
+
+---
+after: requestprocessors
+---
+SilverStripe\Core\Injector\Injector:
+  SilverStripe\Control\Middleware\AllowedHostsMiddleware:
+    properties:
+      AllowedHosts:
+        - 'example.com'
+        - 'www.example.com'
+        - 'subdomain.example.com'
+```
+
+OR
+
+```.env
+SS_ALLOWED_HOSTS="example.com,www.example.com,subdomain.example.com"
+```

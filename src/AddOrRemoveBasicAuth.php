@@ -77,7 +77,6 @@ class AddOrRemoveBasicAuth implements Flushable
      */
     private static array $htaccess_files = [
         'public/.htaccess',
-        'public/assets/.htaccess',
     ];
 
     /**
@@ -380,7 +379,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         $excludedHosts = $this->normaliseList(
             array_merge([$liveSiteHost], (array) $this->config()->get('excluded_from_basic_auth_hosts')),
-            fn (string $host): string => $this->normaliseHost($host)
+            fn(string $host): string => $this->normaliseHost($host)
         );
 
         $devExclusions = $this->normaliseList((array) $this->config()->get('dev_exclusions'));
@@ -400,7 +399,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         $legitHosts = $this->normaliseList(
             array_merge($excludedHosts, $legitSites, (array) $this->config()->get('legit_sites')),
-            fn (string $host): string => $this->normaliseHost($host)
+            fn(string $host): string => $this->normaliseHost($host)
         );
 
         $devExclusionsRegex = $this->buildSuffixRegexForRewriteCond($devExclusions);
@@ -481,7 +480,7 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $escaped = array_map(
-            fn (string $suffix): string => preg_quote($suffix, '/'),
+            fn(string $suffix): string => preg_quote($suffix, '/'),
             $suffixes
         );
 
@@ -498,7 +497,7 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $escaped = array_map(
-            fn (string $host): string => preg_quote($host, '/'),
+            fn(string $host): string => preg_quote($host, '/'),
             $hosts
         );
 
@@ -536,7 +535,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         $host = (string) (preg_replace('#^https?://#i', '', $host) ?? $host);
         $host = explode('/', $host, 2)[0];
-
+        //@TODO - add SS_ALLOWED_HOSTS check!!!!
         return strtolower(trim($host));
     }
 
