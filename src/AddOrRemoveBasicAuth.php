@@ -419,8 +419,8 @@ class AddOrRemoveBasicAuth implements Flushable
             if ($trimmed === self::ADD_HOSTS_MARKER) {
                 $excludedHosts[] = $this->wwwVsNonWww($liveSiteHost);
                 foreach ($excludedHosts as $host) {
-                    $safeHost = $this->getSafeHost($host);
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^(' . $safeHost . '$/i';
+                    $safeHost = preg_quote($host, '/');
+                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^' . $safeHost . '$/i';
                 }
 
                 foreach ($devExclusions as $suffix) {
