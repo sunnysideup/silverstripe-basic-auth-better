@@ -130,10 +130,10 @@ class AddOrRemoveBasicAuth implements Flushable
         '<RequireAny>',
         '  # Excluded hosts (no login)',
         self::ADD_HOSTS_MARKER,
-        '',
         '  # All other hosts: require login',
         '  Require valid-user',
         '</RequireAny>',
+
         '',
         '### SILVERSTRIPE START ###',
         '# Deny access to files',
@@ -419,8 +419,8 @@ class AddOrRemoveBasicAuth implements Flushable
             if ($trimmed === self::ADD_HOSTS_MARKER) {
                 $excludedHosts[] = $this->wwwVsNonWww($liveSiteHost);
                 foreach ($excludedHosts as $host) {
-                    $safeHost = str_replace('\'', '\\\'', strtolower($host));
-                    $outputLines[] = '  Require expr tolower(%{HTTP_HOST}) == \'' . $safeHost . '\'';
+                    $safeHost = $this->getSafeHost($host);
+                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^(' . $safeHost . '$/i';
                 }
 
                 foreach ($devExclusions as $suffix) {
@@ -586,5 +586,11 @@ class AddOrRemoveBasicAuth implements Flushable
         if ((bool) $this->config()->get('debug')) {
             DB::alteration_message($message, 'edited');
         }
+    }
+
+    public function getSafeHost(string $host): string
+    {
+        $safeHost = str_replace('\'', '\\\'', strtolower($host));
+        return str_replace('.', '\.', $safeHost);
     }
 }
