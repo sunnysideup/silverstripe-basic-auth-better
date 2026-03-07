@@ -297,7 +297,11 @@ class AddOrRemoveBasicAuth implements Flushable
             $this->password = (string) $this->config()->get('default_password');
         }
 
-        if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
+        if ($this->needsProtection && ($this->userName === self::$default_user_name && $this->password === self::$default_password)) {
+            if (file_exists($this->htpasswdPath)) {
+                // password and username are set to default and htpasswd already exists - should be fine.
+                return;
+            }
             user_error(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL, E_USER_ERROR);
         }
 
