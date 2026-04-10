@@ -84,7 +84,7 @@ class AddOrRemoveBasicAuth implements Flushable
      */
     private static array $htaccess_lines = [
         '# Force HTTPS in browsers (HSTS) — ONLY if https works for all subdomains',
-        'Header always set Strict-Transport-Security "max-age=31536000; preload"',
+        'Header always set Strict-Transport-Security "max-age=31536000"',
         '',
         '# Better privacy default than same-origin for most sites',
         'Header always set Referrer-Policy "strict-origin-when-cross-origin"',
@@ -130,10 +130,10 @@ class AddOrRemoveBasicAuth implements Flushable
         '<RequireAny>',
         '  # Excluded hosts (no login)',
         self::ADD_HOSTS_MARKER,
+        '',
         '  # All other hosts: require login',
         '  Require valid-user',
         '</RequireAny>',
-
         '',
         '### SILVERSTRIPE START ###',
         '# Deny access to files',
@@ -160,8 +160,8 @@ class AddOrRemoveBasicAuth implements Flushable
         '',
         '# Process through SilverStripe if no file with the requested name exists.',
         'RewriteCond %{REQUEST_FILENAME} !-f',
-        'RewriteRule .* index.php',
-        '### SILVERSTRIPE END ###',
+        'RewriteRule .* index.php [L]',
+        '### SILVERSTRIPE END - THERE SHOULD NO NOTHING PAST HERE! ###',
         '',
     ];
 
@@ -297,11 +297,7 @@ class AddOrRemoveBasicAuth implements Flushable
             $this->password = (string) $this->config()->get('default_password');
         }
 
-        if ($this->needsProtection && ($this->userName === self::$default_user_name && $this->password === self::$default_password)) {
-            if (file_exists($this->htpasswdPath)) {
-                // password and username are set to default and htpasswd already exists - should be fine.
-                return;
-            }
+        if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
             user_error(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL, E_USER_ERROR);
         }
 
@@ -335,7 +331,7 @@ class AddOrRemoveBasicAuth implements Flushable
         $liveSiteHost = $this->normaliseHost((string) $this->config()->get('canonical_url'));
         if ($liveSiteHost === '') {
             user_error(
-                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config.' . PHP_EOL,
+                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config. See: vendor/sunnysideup/basic-auth-better/_config/basic-auth-better.yml.example' . PHP_EOL,
                 E_USER_ERROR
             );
         }
@@ -423,13 +419,19 @@ class AddOrRemoveBasicAuth implements Flushable
             if ($trimmed === self::ADD_HOSTS_MARKER) {
                 $excludedHosts[] = $this->wwwVsNonWww($liveSiteHost);
                 foreach ($excludedHosts as $host) {
-                    $safeHost = preg_quote($host, '/');
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^' . $safeHost . '$/i';
+                    // Escape the hostname for regex (e.g., turns '.' into '\.')
+                    $safeHostRegex = preg_quote(strtolower($host), '/');
+
+                    // Match the host exactly from the start (^), allowing an optional port number at the end
+                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^' . $safeHostRegex . '(:[0-9]+)?$/i';
                 }
 
                 foreach ($devExclusions as $suffix) {
-                    $safeSuffixRegex = preg_quote($suffix, '/');
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /' . $safeSuffixRegex . '$/i';
+                    // Escape the suffix for regex
+                    $safeSuffixRegex = preg_quote(strtolower($suffix), '/');
+
+                    // Match the suffix at the end of the domain, allowing an optional port number at the end
+                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /' . $safeSuffixRegex . '(:[0-9]+)?$/i';
                 }
 
                 continue;
@@ -594,7 +596,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
     public function getSafeHost(string $host): string
     {
-        $safeHost = str_replace('\'', '\\\'', strtolower($host));
+        $safeHost = str_replace("'", '\\\'', strtolower($host));
         return str_replace('.', '\.', $safeHost);
     }
 }
