@@ -85,7 +85,7 @@ class AddOrRemoveBasicAuth implements Flushable
     private static array $htaccess_lines = [
         '##################### 1. HEADERS ##########################',
         '',
-        '# Force HTTPS in browsers (HSTS) — ONLY if https works for all subdomains',
+        '# Force HTTPS in browsers (HSTS) — we do it on a domain by domain basis ',
         'Header always set Strict-Transport-Security "max-age=31536000"',
         '',
         '# Better privacy default than same-origin for most sites',
@@ -102,6 +102,10 @@ class AddOrRemoveBasicAuth implements Flushable
         '',
         '# Baseline hardening',
         'Header always set X-Content-Type-Options "nosniff"',
+        '',
+        '',
+        '# It tells caches (browser, Cloudflare, proxies): This response is different depending on the Accept-Encoding request header.',
+        'Header always merge Vary "Accept-Encoding"',
         '',
         '##################### 2. CANONICAL REDIRECTS ##############',
         '',
@@ -126,7 +130,7 @@ class AddOrRemoveBasicAuth implements Flushable
         '',
         '# 3) Canonical host',
         'RewriteCond %{HTTP_HOST} !^(' . self::LIST_OF_LEGIT_SITES_MARKER . ')$ [NC]',
-        'RewriteRule ^ https://' . self::LIVE_SITE_HOST_MARKER . '%{REQUEST_URI} [R=301,L]',
+        'RewriteRule ^ https://' . self::LIVE_SITE_HOST_MARKER . '%{REQUEST_URI} [R=302,L]',
         '',
         '##################### 3. BASIC AUTH #######################',
         '',
@@ -138,7 +142,7 @@ class AddOrRemoveBasicAuth implements Flushable
         '  # Excluded hosts (no login)',
         self::ADD_HOSTS_MARKER,
         '  # Excluded file types (no login)',
-        '  Require expr %{REQUEST_URI} =~ m#\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|pdf|xml)$#i',
+        '  Require expr %{REQUEST_URI} =~ m#^/(assets|_resources)/.*\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|pdf|xml|ico)$#i',
         '',
         '  # All other hosts: require login',
         '  Require valid-user',
@@ -399,10 +403,11 @@ class AddOrRemoveBasicAuth implements Flushable
         );
 
         $devExclusions = $this->normaliseList((array) $this->config()->get('dev_exclusions'));
-
+        $isWwwCanonical = $this->isWwwCanonical($liveSiteHost);
         $legitSites = [];
-        if (str_starts_with($liveSiteHost, 'www')) {
-            $liveHostWithoutWWW = preg_replace('/^www\./i', '', $liveSiteHost) ?? $liveSiteHost;
+        if ($isWwwCanonical) {
+            $liveHostWithoutWWW = preg_replace('/^www\./i', '', $liveSiteHost);
+            $liveHostWithoutWWW = is_string($liveHostWithoutWWW) ? $liveHostWithoutWWW : $liveSiteHost;
         } else {
             $liveHostWithoutWWW = $liveSiteHost;
         }
@@ -422,7 +427,21 @@ class AddOrRemoveBasicAuth implements Flushable
         $legitSitesRegex = $this->buildExactHostsRegex($legitHosts);
 
         $outputLines = [];
-
+        $canonicalLines = [];
+        if ($isWwwCanonical) {
+            $canonicalLines[] = '# Canonical redirect: enforce www';
+            $canonicalLines[] = 'RewriteCond %{HTTP_HOST} !^www\. [NC]';
+            $canonicalLines[] = 'RewriteRule ^ https://www.' . preg_replace('#^www\.#', '', $liveSiteHost) . '%{REQUEST_URI} [R=301,L]';
+            $canonicalLines[] = '';
+        } else {
+            $canonicalLines[] = '# Canonical redirect: enforce non-www';
+            $canonicalLines[] = 'RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]';
+            $canonicalLines[] = 'RewriteRule ^ https://%1%{REQUEST_URI} [R=301,L]';
+            $canonicalLines[] = '';
+        }
+        foreach ($canonicalLines as $line) {
+            $outputLines[] = $line;
+        }
         foreach ($templateLines as $line) {
             $lineString = (string) $line;
             $trimmed = trim($lineString);
@@ -608,5 +627,18 @@ class AddOrRemoveBasicAuth implements Flushable
         if ((bool) $this->config()->get('debug')) {
             DB::alteration_message($message, 'edited');
         }
+    }
+    private function isWwwCanonical(?string $host = ''): bool
+    {
+        if (! $host) {
+            $host = (string) $this->config()->get('canonical_url') ?? '';
+        }
+        if ($host === '') {
+            user_error('Host is empty.', E_USER_WARNING);
+        }
+        if (str_starts_with(strtolower($host), 'http')) {
+            user_error('Host should not include protocol (http/https): ' . $host, E_USER_WARNING);
+        }
+        return str_starts_with(strtolower($host), 'www.');
     }
 }
