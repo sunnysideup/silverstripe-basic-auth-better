@@ -16,7 +16,7 @@
   ],
   "license": "BSD-3-Clause",
   "require": {
-    "silverstripe/framework": "dev-main",
+    "silverstripe/framework": "^6.0",
     "silverstripe/admin": "^3.0"
   },
   "require-dev": {
