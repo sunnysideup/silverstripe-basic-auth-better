@@ -19,19 +19,19 @@ class AddOrRemoveBasicAuth implements Flushable
     use Injectable;
     use Configurable;
 
-    private const START_MARKER = '# START BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
+    private const string START_MARKER = '# START BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
 
-    private const END_MARKER = '# END BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
+    private const string END_MARKER = '# END BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
 
-    private const HTPASSWD_PATH_MARKER = '# HTPASSWD PATH HERE';
+    private const string HTPASSWD_PATH_MARKER = '# HTPASSWD PATH HERE';
 
-    private const ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
+    private const string ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
 
-    private const DEV_EXCLUSIONS_MARKER = '# DEV EXCLUSIONS HERE';
+    private const string DEV_EXCLUSIONS_MARKER = '# DEV EXCLUSIONS HERE';
 
-    private const LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
+    private const string LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
 
-    private const LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
+    private const string LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
 
     private static string $htpasswd_path = '/var/www/html';
 
@@ -236,6 +236,7 @@ class AddOrRemoveBasicAuth implements Flushable
             if (Director::isDev()) {
                 $this->updateHtaccessFiles(true);
             }
+
             return;
         }
 
@@ -411,6 +412,7 @@ class AddOrRemoveBasicAuth implements Flushable
         } else {
             $liveHostWithoutWWW = $liveSiteHost;
         }
+
         foreach ((array) $this->config()->get('legit_sub_domains') as $subDomain) {
             $subDomainString = trim((string) $subDomain);
             if ($subDomainString !== '') {
@@ -439,9 +441,11 @@ class AddOrRemoveBasicAuth implements Flushable
             $canonicalLines[] = 'RewriteRule ^ https://%1%{REQUEST_URI} [R=301,L]';
             $canonicalLines[] = '';
         }
+
         foreach ($canonicalLines as $line) {
             $outputLines[] = $line;
         }
+
         foreach ($templateLines as $line) {
             $lineString = (string) $line;
             $trimmed = trim($lineString);
@@ -628,17 +632,21 @@ class AddOrRemoveBasicAuth implements Flushable
             DB::alteration_message($message, 'edited');
         }
     }
+
     private function isWwwCanonical(?string $host = ''): bool
     {
         if (! $host) {
             $host = (string) $this->config()->get('canonical_url') ?? '';
         }
+
         if ($host === '') {
             user_error('Host is empty.', E_USER_WARNING);
         }
+
         if (str_starts_with(strtolower($host), 'http')) {
             user_error('Host should not include protocol (http/https): ' . $host, E_USER_WARNING);
         }
+
         return str_starts_with(strtolower($host), 'www.');
     }
 }
