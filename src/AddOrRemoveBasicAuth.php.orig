@@ -85,7 +85,11 @@ class AddOrRemoveBasicAuth implements Flushable
     private static array $htaccess_lines = [
         '##################### 1. HEADERS ##########################',
         '',
+<<<<<<< HEAD
+        '# Force HTTPS in browsers (HSTS) — ONLY if https works for all subdomains',
+=======
         '# Force HTTPS in browsers (HSTS) — we do it on a domain by domain basis ',
+>>>>>>> dcfc99be0f9a8aa55202d6ac3a497fbd01c44219
         'Header always set Strict-Transport-Security "max-age=31536000"',
         '',
         '# Better privacy default than same-origin for most sites',
@@ -103,10 +107,13 @@ class AddOrRemoveBasicAuth implements Flushable
         '# Baseline hardening',
         'Header always set X-Content-Type-Options "nosniff"',
         '',
+<<<<<<< HEAD
+=======
         '',
         '# It tells caches (browser, Cloudflare, proxies): This response is different depending on the Accept-Encoding request header.',
         'Header always merge Vary "Accept-Encoding"',
         '',
+>>>>>>> dcfc99be0f9a8aa55202d6ac3a497fbd01c44219
         '##################### 2. CANONICAL REDIRECTS ##############',
         '',
         'RewriteEngine On',
@@ -130,7 +137,9 @@ class AddOrRemoveBasicAuth implements Flushable
         '',
         '# 3) Canonical host',
         'RewriteCond %{HTTP_HOST} !^(' . self::LIST_OF_LEGIT_SITES_MARKER . ')$ [NC]',
-        'RewriteRule ^ https://' . self::LIVE_SITE_HOST_MARKER . '%{REQUEST_URI} [R=301,L]',
+        'RewriteRule ^ https://' . self::LIVE_SITE_HOST_MARKER . '%{REQUEST_URI} [R=302,L]',
+        '',
+        '##################### 3. BASIC AUTH #######################',
         '',
         '##################### 3. BASIC AUTH #######################',
         '',
@@ -141,8 +150,11 @@ class AddOrRemoveBasicAuth implements Flushable
         '<RequireAny>',
         '  # Excluded hosts (no login)',
         self::ADD_HOSTS_MARKER,
+<<<<<<< HEAD
+=======
         '  # Excluded file types (no login)',
         '  Require expr %{REQUEST_URI} =~ m#^/(assets|_resources)/.*\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|pdf|xml|ico)$#i',
+>>>>>>> dcfc99be0f9a8aa55202d6ac3a497fbd01c44219
         '',
         '  # All other hosts: require login',
         '  Require valid-user',
@@ -628,6 +640,8 @@ class AddOrRemoveBasicAuth implements Flushable
             DB::alteration_message($message, 'edited');
         }
     }
+<<<<<<< HEAD
+=======
     private function isWwwCanonical(?string $host = ''): bool
     {
         if (! $host) {
@@ -641,4 +655,5 @@ class AddOrRemoveBasicAuth implements Flushable
         }
         return str_starts_with(strtolower($host), 'www.');
     }
+>>>>>>> dcfc99be0f9a8aa55202d6ac3a497fbd01c44219
 }
