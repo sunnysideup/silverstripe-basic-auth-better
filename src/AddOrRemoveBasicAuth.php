@@ -399,7 +399,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         $excludedHosts = $this->normaliseList(
             array_merge([$liveSiteHost], (array) $this->config()->get('excluded_from_basic_auth_hosts')),
-            fn(string $host): string => $this->normaliseHost($host)
+            fn (string $host): string => $this->normaliseHost($host)
         );
 
         $devExclusions = $this->normaliseList((array) $this->config()->get('dev_exclusions'));
@@ -420,7 +420,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         $legitHosts = $this->normaliseList(
             array_merge($excludedHosts, $legitSites, (array) $this->config()->get('legit_sites')),
-            fn(string $host): string => $this->normaliseHost($host)
+            fn (string $host): string => $this->normaliseHost($host)
         );
 
         $devExclusionsRegex = $this->buildSuffixRegexForRewriteCond($devExclusions);
@@ -430,8 +430,10 @@ class AddOrRemoveBasicAuth implements Flushable
         $canonicalLines = [];
         if ($isWwwCanonical) {
             $canonicalLines[] = '# Canonical redirect: enforce www';
+            $bareHost = preg_replace('#^www\.#', '', $liveSiteHost);
             $canonicalLines[] = 'RewriteCond %{HTTP_HOST} !^www\. [NC]';
-            $canonicalLines[] = 'RewriteRule ^ https://www.' . preg_replace('#^www\.#', '', $liveSiteHost) . '%{REQUEST_URI} [R=301,L]';
+            $canonicalLines[] = 'RewriteCond %{HTTP_HOST} ^' . preg_quote($bareHost, '/') . '$ [NC]';
+            $canonicalLines[] = 'RewriteRule ^ https://www.' . $bareHost . '%{REQUEST_URI} [R=301,L]';
             $canonicalLines[] = '';
         } else {
             $canonicalLines[] = '# Canonical redirect: enforce non-www';
@@ -521,7 +523,7 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $escaped = array_map(
-            fn(string $suffix): string => preg_quote($suffix, '/'),
+            fn (string $suffix): string => preg_quote($suffix, '/'),
             $suffixes
         );
 
@@ -538,7 +540,7 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $escaped = array_map(
-            fn(string $host): string => preg_quote($host, '/'),
+            fn (string $host): string => preg_quote($host, '/'),
             $hosts
         );
 
