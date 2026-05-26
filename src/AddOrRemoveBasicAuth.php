@@ -246,7 +246,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         if ($disabled) {
             $this->deleteHtpasswdFile();
-            if (Director::isDev()) {
+            if (Director::isDev() && Director::is_cli()) {
                 $this->updateHtaccessFiles(true);
             }
             return;
@@ -260,7 +260,7 @@ class AddOrRemoveBasicAuth implements Flushable
             $this->deleteHtpasswdFile();
         }
 
-        if (Director::isDev()) {
+        if (Director::isDev() && Director::is_cli()) {
             $this->updateHtaccessFiles(false);
         }
     }
