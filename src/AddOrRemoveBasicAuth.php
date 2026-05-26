@@ -13,6 +13,7 @@ use SilverStripe\Core\Injector\Injectable;
 use SilverStripe\Core\Injector\Injector;
 use SilverStripe\ORM\DB;
 use SilverStripe\Security\BasicAuth;
+use Throwable;
 
 class AddOrRemoveBasicAuth implements Flushable
 {
@@ -212,8 +213,20 @@ class AddOrRemoveBasicAuth implements Flushable
     {
         /** @var self $instance */
         $instance = Injector::inst()->get(static::class);
-        $instance->initialize();
-        $instance->process();
+        try {
+            $instance->initialize();
+            $instance->process();
+        } catch (Throwable $e) {
+            DB::alteration_message(
+                sprintf(
+                    'Error processing BasicAuth configuration: %s (in %s:%d)',
+                    $e->getMessage(),
+                    $e->getFile(),
+                    $e->getLine()
+                ),
+                'deleted'
+            );
+        }
     }
 
     public function initialize(): void
