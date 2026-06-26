@@ -319,19 +319,19 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
-            user_error(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL, E_USER_ERROR);
+            throw new \RuntimeException(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL);
         }
 
         $hash = password_hash($this->password, PASSWORD_BCRYPT);
         if ($hash === false) {
-            user_error('Could not hash BasicAuth password. Please check your .env file.', E_USER_ERROR);
+            throw new \RuntimeException('Could not hash BasicAuth password. Please check your .env file.');
         }
 
         $line = $this->userName . ':' . $hash . PHP_EOL;
 
         $result = @file_put_contents($this->htpasswdPath, $line, LOCK_EX);
         if ($result === false) {
-            user_error('Could not write .htpasswd file at: ' . $this->htpasswdPath, E_USER_ERROR);
+            throw new \RuntimeException('Could not write .htpasswd file at: ' . $this->htpasswdPath);
         }
 
         @chmod($this->htpasswdPath, 0640);
@@ -351,9 +351,8 @@ class AddOrRemoveBasicAuth implements Flushable
     {
         $liveSiteHost = $this->normaliseHost((string) $this->config()->get('canonical_url'));
         if ($liveSiteHost === '') {
-            user_error(
-                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config. See: vendor/sunnysideup/basic-auth-better/_config/basic-auth-better.yml.example' . PHP_EOL,
-                E_USER_ERROR
+            throw new \RuntimeException(
+                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config. See: vendor/sunnysideup/basic-auth-better/_config/basic-auth-better.yml.example' . PHP_EOL
             );
         }
 
@@ -567,7 +566,7 @@ class AddOrRemoveBasicAuth implements Flushable
             ] as $marker
         ) {
             if (str_contains($joined, $marker)) {
-                user_error('Unreplaced .htaccess marker found: ' . $marker, E_USER_ERROR);
+                throw new \RuntimeException('Unreplaced .htaccess marker found: ' . $marker);
             }
         }
     }
