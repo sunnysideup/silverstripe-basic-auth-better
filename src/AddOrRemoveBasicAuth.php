@@ -115,7 +115,7 @@ class AddOrRemoveBasicAuth implements Flushable
         'SetEnv HTTP_MOD_REWRITE On',
         '',
         '# YOU DONT WANT MultiViews enabled, security risk',
-        'Options -MultiViews',
+        'Options -MultiViews -Indexes',
         '',
         self::WWW_REDIRECT_MARKER,
         '',
