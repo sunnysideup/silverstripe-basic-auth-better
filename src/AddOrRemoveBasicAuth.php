@@ -33,6 +33,7 @@ class AddOrRemoveBasicAuth implements Flushable
     private const LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
 
     private const LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
+    private const WWW_REDIRECT_MARKER = '# WWW REDIRECT HERE';
 
     private static string $htpasswd_path = '/var/www/html';
 
@@ -112,7 +113,11 @@ class AddOrRemoveBasicAuth implements Flushable
         '',
         'RewriteEngine On',
         'SetEnv HTTP_MOD_REWRITE On',
+        '',
+        '# YOU DONT WANT MultiViews enabled, security risk',
         'Options -MultiViews',
+        '',
+        self::WWW_REDIRECT_MARKER,
         '',
         '# Canonical redirects',
         '# If local (.ss4, ddev, etc...), do nothing (skip next 3 rules)',
@@ -454,9 +459,7 @@ class AddOrRemoveBasicAuth implements Flushable
             $canonicalLines[] = 'RewriteRule ^ https://%1%{REQUEST_URI} [R=301,L]';
             $canonicalLines[] = '';
         }
-        foreach ($canonicalLines as $line) {
-            $outputLines[] = $line;
-        }
+        $canonicalLinesString = implode(PHP_EOL, $canonicalLines);
         foreach ($templateLines as $line) {
             $lineString = (string) $line;
             $trimmed = trim($lineString);
@@ -490,6 +493,7 @@ class AddOrRemoveBasicAuth implements Flushable
             $lineString = str_replace(self::DEV_EXCLUSIONS_MARKER, $devExclusionsRegex, $lineString);
             $lineString = str_replace(self::LIST_OF_LEGIT_SITES_MARKER, $legitSitesRegex, $lineString);
             $lineString = str_replace(self::LIVE_SITE_HOST_MARKER, $liveSiteHost, $lineString);
+            $lineString = str_replace(self::WWW_REDIRECT_MARKER, $canonicalLinesString, $lineString);
 
             $outputLines[] = $lineString;
         }
