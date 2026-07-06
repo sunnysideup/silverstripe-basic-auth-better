@@ -28,12 +28,18 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private const ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
 
+    private const SHARED_SECRET_MARKER = '# SHARED SECRET HERE';
+
     private const DEV_EXCLUSIONS_MARKER = '# DEV EXCLUSIONS HERE';
 
     private const LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
 
     private const LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
     private const WWW_REDIRECT_MARKER = '# WWW REDIRECT HERE';
+
+    private const ENV_SS_SHARED_SECRET_HEADER = 'SS_SHARED_SECRET_HEADER';
+    private const ENV_SS_SHARED_SECRET_VALUE = 'SS_SHARED_SECRET_VALUE';
+    private const DEFAULT_SHARED_SECRET_HEADER = 'X-Origin-Secret';
 
     private static string $htpasswd_path = '/var/www/html';
 
@@ -85,6 +91,10 @@ class AddOrRemoveBasicAuth implements Flushable
      * @var array<int, string>
      */
     private static array $htaccess_lines = [
+        '##################### 0. CDN PROTECTION ###################',
+        '',
+        self::SHARED_SECRET_MARKER,
+        '',
         '##################### 1. HEADERS ##########################',
         '',
         '# Force HTTPS in browsers (HSTS) — we do it on a domain by domain basis ',
@@ -215,6 +225,9 @@ class AddOrRemoveBasicAuth implements Flushable
      * @var array<int, string>
      */
     private array $htaccessPaths = [];
+
+    private string $sharedSecretHeader;
+    private string $sharedSecretValue;
 
     public static function flush(): void
     {
@@ -492,6 +505,7 @@ class AddOrRemoveBasicAuth implements Flushable
                 continue;
             }
 
+            $lineString = str_replace(self::SHARED_SECRET_MARKER, $this->buildSecretDirectiveLines(), $lineString);
             $lineString = str_replace(self::DEV_EXCLUSIONS_MARKER, $devExclusionsRegex, $lineString);
             $lineString = str_replace(self::LIST_OF_LEGIT_SITES_MARKER, $legitSitesRegex, $lineString);
             $lineString = str_replace(self::LIVE_SITE_HOST_MARKER, $liveSiteHost, $lineString);
@@ -577,6 +591,7 @@ class AddOrRemoveBasicAuth implements Flushable
             [
                 self::HTPASSWD_PATH_MARKER,
                 self::ADD_HOSTS_MARKER,
+                self::SHARED_SECRET_MARKER,
                 self::DEV_EXCLUSIONS_MARKER,
                 self::LIST_OF_LEGIT_SITES_MARKER,
                 self::LIVE_SITE_HOST_MARKER,
@@ -599,6 +614,41 @@ class AddOrRemoveBasicAuth implements Flushable
         $host = explode('/', $host, 2)[0];
         //@TODO - add SS_ALLOWED_HOSTS check!!!!
         return strtolower(trim($host));
+    }
+
+    private function buildSecretDirectiveLines(): string
+    {
+        $this->sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
+        $this->sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
+        if (!$this->sharedSecretValue)
+        {
+            return '# No shared secret configured.';
+        }
+        $this->validateSharedSecret();
+        return implode(PHP_EOL,
+        [
+                "<IfModule mod_headers.c>",
+                "  <If \"%{HTTP:X-Origin-Secret} != '{$this->sharedSecretValue}'\">",
+                "    Require all denied",
+                "  </If>",
+                "</IfModule>",
+            ]);
+    }
+
+    private function validateSharedSecret(): void
+    {
+        if (!str_starts_with($this->sharedSecretHeader, 'X-')) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must start with X-');
+        }
+        if (!preg_match('/^[a-zA-Z0-9-]+$/', $this->sharedSecretHeader)) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must be alphanumeric and dashes i.e. a-z, A-Z, 0-9, - and MUST NOT contains symbols or spaces');
+        }
+        if (strlen($this->sharedSecretValue) < 25) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' needs to be at least 25 characters long');
+        }
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $this->sharedSecretValue)) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' must be alphanumeric i.e. a-z, A-Z, 0-9 and MUST NOT contains symbols or spaces');
+        }
     }
 
     /**
