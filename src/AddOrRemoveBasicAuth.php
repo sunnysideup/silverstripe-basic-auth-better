@@ -13,6 +13,7 @@ use SilverStripe\Core\Injector\Injectable;
 use SilverStripe\Core\Injector\Injector;
 use SilverStripe\ORM\DB;
 use SilverStripe\Security\BasicAuth;
+use Throwable;
 
 class AddOrRemoveBasicAuth implements Flushable
 {
@@ -27,11 +28,21 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private const string ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
 
+    private const string SHARED_SECRET_MARKER = '# SHARED SECRET HERE';
+
     private const string DEV_EXCLUSIONS_MARKER = '# DEV EXCLUSIONS HERE';
 
     private const string LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
 
     private const string LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
+
+    private const WWW_REDIRECT_MARKER = '# WWW REDIRECT HERE';
+
+    private const ENV_SS_SHARED_SECRET_HEADER = 'SS_SHARED_SECRET_HEADER';
+
+    private const ENV_SS_SHARED_SECRET_VALUE = 'SS_SHARED_SECRET_VALUE';
+
+    private const DEFAULT_SHARED_SECRET_HEADER = 'X-Origin-Secret';
 
     private static string $htpasswd_path = '/var/www/html';
 
@@ -83,6 +94,10 @@ class AddOrRemoveBasicAuth implements Flushable
      * @var array<int, string>
      */
     private static array $htaccess_lines = [
+        '##################### 0. CDN PROTECTION ###################',
+        '',
+        self::SHARED_SECRET_MARKER,
+        '',
         '##################### 1. HEADERS ##########################',
         '',
         '# Force HTTPS in browsers (HSTS) — we do it on a domain by domain basis ',
@@ -103,15 +118,18 @@ class AddOrRemoveBasicAuth implements Flushable
         '# Baseline hardening',
         'Header always set X-Content-Type-Options "nosniff"',
         '',
-        '',
         '# It tells caches (browser, Cloudflare, proxies): This response is different depending on the Accept-Encoding request header.',
         'Header always merge Vary "Accept-Encoding"',
+        '',
+        '# YOU DONT WANT MultiViews enabled, security risk',
+        'Options -MultiViews -Indexes',
         '',
         '##################### 2. CANONICAL REDIRECTS ##############',
         '',
         'RewriteEngine On',
         'SetEnv HTTP_MOD_REWRITE On',
-        'Options -MultiViews',
+        '',
+        self::WWW_REDIRECT_MARKER,
         '',
         '# Canonical redirects',
         '# If local (.ss4, ddev, etc...), do nothing (skip next 3 rules)',
@@ -151,9 +169,12 @@ class AddOrRemoveBasicAuth implements Flushable
         '##################### 4. BLOCK BAD FILES ###################',
         '',
         '# Deny access to files',
-        '<FilesMatch "\.(env|ss|yml|log|sql(\.gz)?)$|^web\.config$|^composer\.(json|lock)$">',
+        '<FilesMatch "(?i)\.(env(\..+)?|ss|yml|yaml|log|sql(\.gz)?|bak|swp|swo|orig|inc|ini|sh)$|^(web\.config|composer\.(json|lock)|package(-lock)?\.json|yarn\.lock|\.ds_store|\.git.*|\.htpasswd)$">',
         '    Require all denied',
         '</FilesMatch>',
+        '',
+        '# stop people traversing git dir',
+        'RewriteRule (^|/)\.git(/|$) - [F,L,NC]',
         '',
         '# Deny access to potentially sensitive files and folders',
         'RewriteRule ^vendor(/|$) - [F,L,NC]',
@@ -208,12 +229,27 @@ class AddOrRemoveBasicAuth implements Flushable
      */
     private array $htaccessPaths = [];
 
+    private string $sharedSecretHeader;
+    private string $sharedSecretValue;
+
     public static function flush(): void
     {
         /** @var self $instance */
         $instance = Injector::inst()->get(static::class);
-        $instance->initialize();
-        $instance->process();
+        try {
+            $instance->initialize();
+            $instance->process();
+        } catch (Throwable $e) {
+            DB::alteration_message(
+                sprintf(
+                    'Error processing BasicAuth configuration: %s (in %s:%d)',
+                    $e->getMessage(),
+                    $e->getFile(),
+                    $e->getLine()
+                ),
+                'deleted'
+            );
+        }
     }
 
     public function initialize(): void
@@ -233,7 +269,7 @@ class AddOrRemoveBasicAuth implements Flushable
 
         if ($disabled) {
             $this->deleteHtpasswdFile();
-            if (Director::isDev()) {
+            if (Director::isDev() && Director::is_cli()) {
                 $this->updateHtaccessFiles(true);
             }
 
@@ -248,7 +284,7 @@ class AddOrRemoveBasicAuth implements Flushable
             $this->deleteHtpasswdFile();
         }
 
-        if (Director::isDev()) {
+        if (Director::isDev() && Director::is_cli()) {
             $this->updateHtaccessFiles(false);
         }
     }
@@ -430,11 +466,12 @@ class AddOrRemoveBasicAuth implements Flushable
         $outputLines = [];
         $canonicalLines = [];
         if ($isWwwCanonical) {
-            // this is not a good idea, but it sends all without www to www.
-            // $canonicalLines[] = '# Canonical redirect: enforce www';
-            // $canonicalLines[] = 'RewriteCond %{HTTP_HOST} !^www\. [NC]';
-            // $canonicalLines[] = 'RewriteRule ^ https://www.' . preg_replace('#^www\.#', '', $liveSiteHost) . '%{REQUEST_URI} [R=301,L]';
-            // $canonicalLines[] = '';
+            $canonicalLines[] = '# Canonical redirect: enforce www';
+            $bareHost = preg_replace('#^www\.#', '', $liveSiteHost);
+            $canonicalLines[] = 'RewriteCond %{HTTP_HOST} !^www\. [NC]';
+            $canonicalLines[] = 'RewriteCond %{HTTP_HOST} ^' . preg_quote($bareHost, '/') . '$ [NC]';
+            $canonicalLines[] = 'RewriteRule ^ https://www.' . $bareHost . '%{REQUEST_URI} [R=301,L]';
+            $canonicalLines[] = '';
         } else {
             $canonicalLines[] = '# Canonical redirect: enforce non-www';
             $canonicalLines[] = 'RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]';
@@ -442,10 +479,11 @@ class AddOrRemoveBasicAuth implements Flushable
             $canonicalLines[] = '';
         }
 
-        foreach ($canonicalLines as $line) {
-            $outputLines[] = $line;
-        }
+        // foreach ($canonicalLines as $line) {
+        //     $outputLines[] = $line;
+        // }
 
+        $canonicalLinesString = implode(PHP_EOL, $canonicalLines);
         foreach ($templateLines as $line) {
             $lineString = (string) $line;
             $trimmed = trim($lineString);
@@ -476,9 +514,11 @@ class AddOrRemoveBasicAuth implements Flushable
                 continue;
             }
 
+            $lineString = str_replace(self::SHARED_SECRET_MARKER, $this->buildSecretDirectiveLines(), $lineString);
             $lineString = str_replace(self::DEV_EXCLUSIONS_MARKER, $devExclusionsRegex, $lineString);
             $lineString = str_replace(self::LIST_OF_LEGIT_SITES_MARKER, $legitSitesRegex, $lineString);
             $lineString = str_replace(self::LIVE_SITE_HOST_MARKER, $liveSiteHost, $lineString);
+            $lineString = str_replace(self::WWW_REDIRECT_MARKER, $canonicalLinesString, $lineString);
 
             $outputLines[] = $lineString;
         }
@@ -560,6 +600,7 @@ class AddOrRemoveBasicAuth implements Flushable
             [
                 self::HTPASSWD_PATH_MARKER,
                 self::ADD_HOSTS_MARKER,
+                self::SHARED_SECRET_MARKER,
                 self::DEV_EXCLUSIONS_MARKER,
                 self::LIST_OF_LEGIT_SITES_MARKER,
                 self::LIVE_SITE_HOST_MARKER,
@@ -582,6 +623,42 @@ class AddOrRemoveBasicAuth implements Flushable
         $host = explode('/', $host, 2)[0];
         //@TODO - add SS_ALLOWED_HOSTS check!!!!
         return strtolower(trim($host));
+    }
+
+    private function buildSecretDirectiveLines(): string
+    {
+        $this->sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
+        $this->sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
+        if (!$this->sharedSecretValue) {
+            return '# No shared secret configured.';
+        }
+        $this->validateSharedSecret();
+        return implode(
+            PHP_EOL,
+            [
+                "<IfModule mod_headers.c>",
+                "  <If \"%{HTTP:X-Origin-Secret} != '{$this->sharedSecretValue}'\">",
+                "    Require all denied",
+                "  </If>",
+                "</IfModule>",
+            ]
+        );
+    }
+
+    private function validateSharedSecret(): void
+    {
+        if (!str_starts_with($this->sharedSecretHeader, 'X-')) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must start with X-');
+        }
+        if (!preg_match('/^[a-zA-Z0-9-]+$/', $this->sharedSecretHeader)) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must be alphanumeric and dashes i.e. a-z, A-Z, 0-9, - and MUST NOT contains symbols or spaces');
+        }
+        if (strlen($this->sharedSecretValue) < 25) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' needs to be at least 25 characters long');
+        }
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $this->sharedSecretValue)) {
+            throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' must be alphanumeric i.e. a-z, A-Z, 0-9 and MUST NOT contains symbols or spaces');
+        }
     }
 
     /**
