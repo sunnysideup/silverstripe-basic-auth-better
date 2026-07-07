@@ -20,26 +20,29 @@ class AddOrRemoveBasicAuth implements Flushable
     use Injectable;
     use Configurable;
 
-    private const START_MARKER = '# START BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
+    private const string START_MARKER = '# START BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
 
-    private const END_MARKER = '# END BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
+    private const string END_MARKER = '# END BASIC AUTH PROTECTION - Sunnysideup\BasicAuthBetter';
 
-    private const HTPASSWD_PATH_MARKER = '# HTPASSWD PATH HERE';
+    private const string HTPASSWD_PATH_MARKER = '# HTPASSWD PATH HERE';
 
-    private const ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
+    private const string ADD_HOSTS_MARKER = '# ADD HOSTS HERE';
 
-    private const SHARED_SECRET_MARKER = '# SHARED SECRET HERE';
+    private const string SHARED_SECRET_MARKER = '# SHARED SECRET HERE';
 
-    private const DEV_EXCLUSIONS_MARKER = '# DEV EXCLUSIONS HERE';
+    private const string DEV_EXCLUSIONS_MARKER = '# DEV EXCLUSIONS HERE';
 
-    private const LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
+    private const string LIST_OF_LEGIT_SITES_MARKER = '# LIST OF LEGIT SITES HERE';
 
-    private const LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
-    private const WWW_REDIRECT_MARKER = '# WWW REDIRECT HERE';
+    private const string LIVE_SITE_HOST_MARKER = '# LIVE SITE HOST HERE';
 
-    private const ENV_SS_SHARED_SECRET_HEADER = 'SS_SHARED_SECRET_HEADER';
-    private const ENV_SS_SHARED_SECRET_VALUE = 'SS_SHARED_SECRET_VALUE';
-    private const DEFAULT_SHARED_SECRET_HEADER = 'X-Origin-Secret';
+    private const string WWW_REDIRECT_MARKER = '# WWW REDIRECT HERE';
+
+    private const string ENV_SS_SHARED_SECRET_HEADER = 'SS_SHARED_SECRET_HEADER';
+
+    private const string ENV_SS_SHARED_SECRET_VALUE = 'SS_SHARED_SECRET_VALUE';
+
+    private const string DEFAULT_SHARED_SECRET_HEADER = 'X-Origin-Secret';
 
     private static string $htpasswd_path = '/var/www/html';
 
@@ -269,6 +272,7 @@ class AddOrRemoveBasicAuth implements Flushable
             if (Director::isDev() && Director::is_cli()) {
                 $this->updateHtaccessFiles(true);
             }
+
             return;
         }
 
@@ -351,19 +355,19 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
-            user_error(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL, E_USER_ERROR);
+            throw new \RuntimeException(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL);
         }
 
         $hash = password_hash($this->password, PASSWORD_BCRYPT);
         if ($hash === false) {
-            user_error('Could not hash BasicAuth password. Please check your .env file.', E_USER_ERROR);
+            throw new \RuntimeException('Could not hash BasicAuth password. Please check your .env file.');
         }
 
         $line = $this->userName . ':' . $hash . PHP_EOL;
 
         $result = @file_put_contents($this->htpasswdPath, $line, LOCK_EX);
         if ($result === false) {
-            user_error('Could not write .htpasswd file at: ' . $this->htpasswdPath, E_USER_ERROR);
+            throw new \RuntimeException('Could not write .htpasswd file at: ' . $this->htpasswdPath);
         }
 
         @chmod($this->htpasswdPath, 0640);
@@ -383,9 +387,8 @@ class AddOrRemoveBasicAuth implements Flushable
     {
         $liveSiteHost = $this->normaliseHost((string) $this->config()->get('canonical_url'));
         if ($liveSiteHost === '') {
-            user_error(
-                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config. See: vendor/sunnysideup/basic-auth-better/_config/basic-auth-better.yml.example' . PHP_EOL,
-                E_USER_ERROR
+            throw new \RuntimeException(
+                PHP_EOL . PHP_EOL . 'Please set ' . self::class . ':canonical_url (e.g. mysite.co.nz) in YAML config. See: vendor/sunnysideup/basic-auth-better/_config/basic-auth-better.yml.example' . PHP_EOL
             );
         }
 
@@ -444,6 +447,7 @@ class AddOrRemoveBasicAuth implements Flushable
         } else {
             $liveHostWithoutWWW = $liveSiteHost;
         }
+
         foreach ((array) $this->config()->get('legit_sub_domains') as $subDomain) {
             $subDomainString = trim((string) $subDomain);
             if ($subDomainString !== '') {
@@ -474,6 +478,11 @@ class AddOrRemoveBasicAuth implements Flushable
             $canonicalLines[] = 'RewriteRule ^ https://%1%{REQUEST_URI} [R=301,L]';
             $canonicalLines[] = '';
         }
+
+        // foreach ($canonicalLines as $line) {
+        //     $outputLines[] = $line;
+        // }
+
         $canonicalLinesString = implode(PHP_EOL, $canonicalLines);
         foreach ($templateLines as $line) {
             $lineString = (string) $line;
@@ -598,7 +607,7 @@ class AddOrRemoveBasicAuth implements Flushable
             ] as $marker
         ) {
             if (str_contains($joined, $marker)) {
-                user_error('Unreplaced .htaccess marker found: ' . $marker, E_USER_ERROR);
+                throw new \RuntimeException('Unreplaced .htaccess marker found: ' . $marker);
             }
         }
     }
@@ -620,19 +629,20 @@ class AddOrRemoveBasicAuth implements Flushable
     {
         $this->sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
         $this->sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
-        if (!$this->sharedSecretValue)
-        {
+        if (!$this->sharedSecretValue) {
             return '# No shared secret configured.';
         }
         $this->validateSharedSecret();
-        return implode(PHP_EOL,
-        [
+        return implode(
+            PHP_EOL,
+            [
                 "<IfModule mod_headers.c>",
                 "  <If \"%{HTTP:X-Origin-Secret} != '{$this->sharedSecretValue}'\">",
                 "    Require all denied",
                 "  </If>",
                 "</IfModule>",
-            ]);
+            ]
+        );
     }
 
     private function validateSharedSecret(): void
@@ -699,17 +709,21 @@ class AddOrRemoveBasicAuth implements Flushable
             DB::alteration_message($message, 'edited');
         }
     }
+
     private function isWwwCanonical(?string $host = ''): bool
     {
         if (! $host) {
             $host = (string) $this->config()->get('canonical_url') ?? '';
         }
+
         if ($host === '') {
             user_error('Host is empty.', E_USER_WARNING);
         }
+
         if (str_starts_with(strtolower($host), 'http')) {
             user_error('Host should not include protocol (http/https): ' . $host, E_USER_WARNING);
         }
+
         return str_starts_with(strtolower($host), 'www.');
     }
 }
