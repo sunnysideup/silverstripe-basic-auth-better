@@ -44,6 +44,10 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private const string DEFAULT_SHARED_SECRET_HEADER = 'X-Origin-Secret';
 
+    private const string SHARED_SECRET_DIRECTIVE_PLACEHOLDER = '##### SHARED SECRET PLACEHOLDER #####';
+
+    private const string SHARED_SECRET_DIRECTIVE_NOT_SET = '# No shared secret configured.';
+
     private static string $htpasswd_path = '/var/www/html';
 
     /**
@@ -286,6 +290,8 @@ class AddOrRemoveBasicAuth implements Flushable
 
         if (Director::isDev() && Director::is_cli()) {
             $this->updateHtaccessFiles(false);
+        } else if (Director::is_cli()) {
+            $this->updateSharedSecretInHtaccessFiles();
         }
     }
 
@@ -426,6 +432,29 @@ class AddOrRemoveBasicAuth implements Flushable
         }
     }
 
+    private function updateSharedSecretInHtaccessFiles(): void
+    {
+        foreach ($this->htaccessPaths as $htaccessPath) {
+            $data = file_exists($htaccessPath) ? (string) file_get_contents($htaccessPath) : '';
+            if ($data === '') {
+                continue;
+            }
+            if (!str_contains($data, self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER)) {
+                continue;
+            }
+            $data = str_replace(
+                self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER,
+                $this->buildSecretDirectiveLines(),
+                $data
+            );
+            $result = @file_put_contents($htaccessPath, $data, LOCK_EX);
+            if ($result === false) {
+                user_error('Could not update .htaccess file at: ' . $htaccessPath, E_USER_WARNING);
+                continue;
+            }
+        }
+    }
+
     /**
      * @return array<int, string>
      */
@@ -460,6 +489,7 @@ class AddOrRemoveBasicAuth implements Flushable
             fn (string $host): string => $this->normaliseHost($host)
         );
 
+        $sharedSecretLines = $this->buildSecretDirectiveLines();
         $devExclusionsRegex = $this->buildSuffixRegexForRewriteCond($devExclusions);
         $legitSitesRegex = $this->buildExactHostsRegex($legitHosts);
 
@@ -514,7 +544,7 @@ class AddOrRemoveBasicAuth implements Flushable
                 continue;
             }
 
-            $lineString = str_replace(self::SHARED_SECRET_MARKER, $this->buildSecretDirectiveLines(), $lineString);
+            $lineString = str_replace(self::SHARED_SECRET_MARKER, $sharedSecretLines, $lineString);
             $lineString = str_replace(self::DEV_EXCLUSIONS_MARKER, $devExclusionsRegex, $lineString);
             $lineString = str_replace(self::LIST_OF_LEGIT_SITES_MARKER, $legitSitesRegex, $lineString);
             $lineString = str_replace(self::LIVE_SITE_HOST_MARKER, $liveSiteHost, $lineString);
@@ -627,17 +657,20 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private function buildSecretDirectiveLines(): string
     {
+        if (Director::isDev()) {
+            return self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER;
+        }
         $this->sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
         $this->sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
         if (!$this->sharedSecretValue) {
-            return '# No shared secret configured.';
+            return self::SHARED_SECRET_DIRECTIVE_NOT_SET;
         }
         $this->validateSharedSecret();
         return implode(
             PHP_EOL,
             [
                 "<IfModule mod_headers.c>",
-                "  <If \"%{HTTP:X-Origin-Secret} != '{$this->sharedSecretValue}'\">",
+                "  <If \"%{HTTP:{$this->sharedSecretHeader}} != '{$this->sharedSecretValue}'\">",
                 "    Require all denied",
                 "  </If>",
                 "</IfModule>",
