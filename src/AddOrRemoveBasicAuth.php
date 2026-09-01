@@ -88,6 +88,11 @@ class AddOrRemoveBasicAuth implements Flushable
     private static array $legit_sites = [];
 
     /**
+     * List of white-listed IP addresses that can bypass shared secret check.
+     */
+    private static array $shared_secret_whitelisted_ips = [];
+
+    /**
      * @var array<int, string>
      */
     private static array $htaccess_files = [
@@ -233,9 +238,6 @@ class AddOrRemoveBasicAuth implements Flushable
      */
     private array $htaccessPaths = [];
 
-    private string $sharedSecretHeader;
-    private string $sharedSecretValue;
-
     public static function flush(): void
     {
         /** @var self $instance */
@@ -290,7 +292,8 @@ class AddOrRemoveBasicAuth implements Flushable
 
         if (Director::isDev() && Director::is_cli()) {
             $this->updateHtaccessFiles(false);
-        } else if (Director::is_cli()) {
+        }
+        if (Director::is_cli()) {
             $this->updateSharedSecretInHtaccessFiles();
         }
     }
@@ -442,16 +445,20 @@ class AddOrRemoveBasicAuth implements Flushable
             if (!str_contains($data, self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER)) {
                 continue;
             }
-            $data = str_replace(
+            $newData = str_replace(
                 self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER,
                 $this->buildSecretDirectiveLines(),
                 $data
             );
-            $result = @file_put_contents($htaccessPath, $data, LOCK_EX);
-            if ($result === false) {
-                user_error('Could not update .htaccess file at: ' . $htaccessPath, E_USER_WARNING);
+            if ($newData === $data) {
                 continue;
             }
+            $result = @file_put_contents($htaccessPath, $newData, LOCK_EX);
+            if ($result === false) {
+                user_error('BasicAuth could not update shared secret in: ' . $htaccessPath, E_USER_WARNING);
+                continue;
+            }
+            $this->logMessage('BasicAuth updated shared secret in: ' . $htaccessPath);
         }
     }
 
@@ -660,37 +667,70 @@ class AddOrRemoveBasicAuth implements Flushable
         if (Director::isDev()) {
             return self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER;
         }
-        $this->sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
-        $this->sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
-        if (!$this->sharedSecretValue) {
+
+        $sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
+        $sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
+
+        if (!$sharedSecretValue) {
             return self::SHARED_SECRET_DIRECTIVE_NOT_SET;
         }
-        $this->validateSharedSecret();
+
+        $whitelistedIPs = Config::inst()->get(self::class, 'shared_secret_whitelisted_ips') ?? [];
+        $whitelistedIPs = array_filter(array_map('trim', $whitelistedIPs));
+
+        $this->validateSharedSecret($sharedSecretHeader, $sharedSecretValue, $whitelistedIPs);
+
         return implode(
             PHP_EOL,
             [
-                "<IfModule mod_headers.c>",
-                "  <If \"%{HTTP:{$this->sharedSecretHeader}} != '{$this->sharedSecretValue}'\">",
-                "    Require all denied",
-                "  </If>",
+                "<IfModule mod_rewrite.c>",
+                "  RewriteEngine On",
+                "",
+                "  # Check secret header",
+                "  RewriteCond %{HTTP:{$sharedSecretHeader}} !={$sharedSecretValue}",
+                ...$this->buildRewriteCondForWhitelistedIPs($whitelistedIPs),
+                "",
+                "  # Deny access",
+                "  RewriteRule ^ - [F]",
                 "</IfModule>",
             ]
         );
     }
 
-    private function validateSharedSecret(): void
+    private function buildRewriteCondForWhitelistedIPs(array $whitelistedIPs): array
     {
-        if (!str_starts_with($this->sharedSecretHeader, 'X-')) {
+        if ($whitelistedIPs === []) {
+            return [];
+        }
+
+        $this->logMessage('Shared secret is enabled with whitelisted IPs: ' . implode(', ', $whitelistedIPs));
+
+        $address = count($whitelistedIPs) === 1 ? 'address' : 'addresses';
+        $conditions = ["", "  # White-list IP $address"];
+        foreach ($whitelistedIPs as $ip) {
+            $conditions[] = "  RewriteCond %{REMOTE_ADDR} !={$ip}";
+        }
+        return $conditions;
+    }
+
+    private function validateSharedSecret(string $sharedSecretHeader, string $sharedSecretValue, array $whitelistedIPs): void
+    {
+        if (!str_starts_with($sharedSecretHeader, 'X-')) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must start with X-');
         }
-        if (!preg_match('/^[a-zA-Z0-9-]+$/', $this->sharedSecretHeader)) {
+        if (!preg_match('/^[a-zA-Z0-9-]+$/', $sharedSecretHeader)) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must be alphanumeric and dashes i.e. a-z, A-Z, 0-9, - and MUST NOT contains symbols or spaces');
         }
-        if (strlen($this->sharedSecretValue) < 25) {
+        if (strlen($sharedSecretValue) < 25) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' needs to be at least 25 characters long');
         }
-        if (!preg_match('/^[a-zA-Z0-9]+$/', $this->sharedSecretValue)) {
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $sharedSecretValue)) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' must be alphanumeric i.e. a-z, A-Z, 0-9 and MUST NOT contains symbols or spaces');
+        }
+        foreach ($whitelistedIPs as $ip) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+                throw new \RuntimeException('Invalid IP address in shared_secret_whitelisted_ips: ' . $ip);
+            }
         }
     }
 
