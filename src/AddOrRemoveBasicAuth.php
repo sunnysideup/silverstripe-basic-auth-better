@@ -166,7 +166,7 @@ class AddOrRemoveBasicAuth implements Flushable
         'AuthType Basic',
         'AuthName "Please enter your website username and password to access this site."',
         '<RequireAny>',
-        '  # Excluded hosts (no login)',
+        '  # Exclusions (no login) - never based on the Host header',
         self::ADD_HOSTS_MARKER,
         '  # Excluded file types (no login)',
         '  Require expr %{REQUEST_URI} =~ m#^/(assets|_resources)/.*\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|pdf|xml|ico)$#i',
@@ -217,7 +217,25 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private static string $default_user_name = 'authorisedusers';
 
-    private static string $default_password = 'only';
+    /**
+     * Please set SS_BASIC_AUTH_PASSWORD in the environment.
+     */
+    private static string $default_password = '';
+
+    /**
+     * Client addresses (IP addresses or CIDR ranges) that do NOT have to log in. Never use host names for this: the Host header can be forged.
+     * Loopback addresses are always added.
+     *
+     * @var array<int, string>
+     */
+    private static array $excluded_from_basic_auth_ips = [];
+
+    /**
+     * Also skip login for private network ranges (10/8, 172.16/12, 192.168/16)?
+     * Only applied when the .htaccess is generated in dev mode and only if this is switched on:
+     * the generated rules are deployed to other servers, where a load balancer could have a private address.
+     */
+    private static bool $excluded_from_basic_auth_private_ranges_in_dev = false;
 
     private static bool $debug = false;
 
@@ -359,12 +377,9 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $this->password = $this->firstEnvValue(['SS_BASIC_AUTH_PASSWORD']);
-        if ($this->password === '') {
-            $this->password = (string) $this->config()->get('default_password');
-        }
-
-        if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
-            throw new \RuntimeException(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL);
+        $passwordMissing = $this->password === '';
+        if ($passwordMissing) {
+            $this->password = bin2hex(random_bytes(24));
         }
 
         $hash = password_hash($this->password, PASSWORD_BCRYPT);
@@ -382,6 +397,10 @@ class AddOrRemoveBasicAuth implements Flushable
         @chmod($this->htpasswdPath, 0640);
 
         $this->logMessage('.htpasswd file created.');
+
+        if ($passwordMissing) {
+            throw new \RuntimeException(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_PASSWORD in your .env file. Until then the site is locked for everyone (random password).' . PHP_EOL);
+        }
     }
 
     private function deleteHtpasswdFile(): void
@@ -531,23 +550,17 @@ class AddOrRemoveBasicAuth implements Flushable
             }
 
             if ($trimmed === self::ADD_HOSTS_MARKER) {
-                $excludedHosts[] = $this->wwwVsNonWww($liveSiteHost);
-                foreach ($excludedHosts as $host) {
-                    // Escape the hostname for regex (e.g., turns '.' into '\.')
-                    $safeHostRegex = preg_quote(strtolower($host), '/');
-
-                    // Match the host exactly from the start (^), allowing an optional port number at the end
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^' . $safeHostRegex . '(:[0-9]+)?$/i';
+                // NEVER authorise based on the Host header: it can be forged by anyone.
+                // 1. no .htpasswd file means that this server is not protected (e.g. live, dev): decided by the server, not by the visitor.
+                if (! preg_match('#^[A-Za-z0-9_./\-]+$#', $this->htpasswdPath)) {
+                    throw new \RuntimeException('The .htpasswd path contains unsupported characters: ' . $this->htpasswdPath);
                 }
 
-                foreach ($devExclusions as $suffix) {
-                    // Escape the suffix for regex
-                    $safeSuffixRegex = preg_quote(strtolower($suffix), '/');
-
-                    // Match the suffix at the end of the domain, allowing an optional port number at the end
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /' . $safeSuffixRegex . '(:[0-9]+)?$/i';
-                }
-
+                $outputLines[] = "  # No login required if there is no .htpasswd file (this site is not protected)";
+                $outputLines[] = "  Require expr ! -f '" . $this->htpasswdPath . "'";
+                // 2. client address based exclusions
+                $outputLines[] = '  # No login required for these client addresses';
+                $outputLines[] = '  Require ip ' . implode(' ', $this->getExcludedIps());
                 continue;
             }
 
@@ -563,6 +576,29 @@ class AddOrRemoveBasicAuth implements Flushable
         $this->assertNoMarkersRemain($outputLines);
 
         return $outputLines;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function getExcludedIps(): array
+    {
+        $ips = ['127.0.0.1', '::1'];
+        if (Director::isDev() && (bool) $this->config()->get('excluded_from_basic_auth_private_ranges_in_dev')) {
+            $ips = array_merge($ips, ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);
+        }
+
+        foreach ((array) $this->config()->get('excluded_from_basic_auth_ips') as $ip) {
+            $ip = trim((string) $ip);
+            $address = explode('/', $ip, 2)[0];
+            if ($ip !== '' && filter_var($address, FILTER_VALIDATE_IP)) {
+                $ips[] = $ip;
+            } elseif ($ip !== '') {
+                user_error('Invalid IP address in excluded_from_basic_auth_ips: ' . $ip, E_USER_WARNING);
+            }
+        }
+
+        return array_values(array_unique($ips));
     }
 
     /**
