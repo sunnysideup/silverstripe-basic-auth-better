@@ -160,7 +160,7 @@ class AddOrRemoveBasicAuth implements Flushable
         '  # Excluded hosts (no login)',
         self::ADD_HOSTS_MARKER,
         '  # Excluded file types (no login)',
-        '  Require expr %{REQUEST_URI} =~ m#^/(assets|_resources)/.*\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|pdf|xml|ico)$#i',
+        '  Require expr %{REQUEST_URI} =~ m#^/(assets|_resources)/.*\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|ico)$#i',
         '',
         '  # All other hosts: require login',
         '  Require valid-user',
