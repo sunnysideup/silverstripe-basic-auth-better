@@ -44,6 +44,10 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private const string DEFAULT_SHARED_SECRET_HEADER = 'X-Origin-Secret';
 
+    private const string SHARED_SECRET_DIRECTIVE_PLACEHOLDER = '##### SHARED SECRET PLACEHOLDER #####';
+
+    private const string SHARED_SECRET_DIRECTIVE_NOT_SET = '# No shared secret configured.';
+
     private static string $htpasswd_path = '/var/www/html';
 
     /**
@@ -82,6 +86,11 @@ class AddOrRemoveBasicAuth implements Flushable
      * @var array<int, string>
      */
     private static array $legit_sites = [];
+
+    /**
+     * List of white-listed IP addresses that can bypass shared secret check.
+     */
+    private static array $shared_secret_whitelisted_ips = [];
 
     /**
      * @var array<int, string>
@@ -157,7 +166,7 @@ class AddOrRemoveBasicAuth implements Flushable
         'AuthType Basic',
         'AuthName "Please enter your website username and password to access this site."',
         '<RequireAny>',
-        '  # Excluded hosts (no login)',
+        '  # Exclusions (no login) - never based on the Host header',
         self::ADD_HOSTS_MARKER,
         '  # Excluded file types (no login)',
         '  Require expr %{REQUEST_URI} =~ m#^/(assets|_resources)/.*\.(png|jpe?g|gif|webp|svg|avif|css|js|woff2?|ttf|otf|eot|ico)$#i',
@@ -208,7 +217,25 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private static string $default_user_name = 'authorisedusers';
 
-    private static string $default_password = 'only';
+    /**
+     * Please set SS_BASIC_AUTH_PASSWORD in the environment.
+     */
+    private static string $default_password = '';
+
+    /**
+     * Client addresses (IP addresses or CIDR ranges) that do NOT have to log in. Never use host names for this: the Host header can be forged.
+     * Loopback addresses are always added.
+     *
+     * @var array<int, string>
+     */
+    private static array $excluded_from_basic_auth_ips = [];
+
+    /**
+     * Also skip login for private network ranges (10/8, 172.16/12, 192.168/16)?
+     * Only applied when the .htaccess is generated in dev mode and only if this is switched on:
+     * the generated rules are deployed to other servers, where a load balancer could have a private address.
+     */
+    private static bool $excluded_from_basic_auth_private_ranges_in_dev = false;
 
     private static bool $debug = false;
 
@@ -228,9 +255,6 @@ class AddOrRemoveBasicAuth implements Flushable
      * @var array<int, string>
      */
     private array $htaccessPaths = [];
-
-    private string $sharedSecretHeader;
-    private string $sharedSecretValue;
 
     public static function flush(): void
     {
@@ -286,6 +310,9 @@ class AddOrRemoveBasicAuth implements Flushable
 
         if (Director::isDev() && Director::is_cli()) {
             $this->updateHtaccessFiles(false);
+        }
+        if (Director::is_cli()) {
+            $this->updateSharedSecretInHtaccessFiles();
         }
     }
 
@@ -350,12 +377,9 @@ class AddOrRemoveBasicAuth implements Flushable
         }
 
         $this->password = $this->firstEnvValue(['SS_BASIC_AUTH_PASSWORD']);
-        if ($this->password === '') {
-            $this->password = (string) $this->config()->get('default_password');
-        }
-
-        if ($this->needsProtection && ($this->userName === '' || $this->password === '')) {
-            throw new \RuntimeException(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_USER and SS_BASIC_AUTH_PASSWORD in your .env file.' . PHP_EOL);
+        $passwordMissing = $this->password === '';
+        if ($passwordMissing) {
+            $this->password = bin2hex(random_bytes(24));
         }
 
         $hash = password_hash($this->password, PASSWORD_BCRYPT);
@@ -373,6 +397,10 @@ class AddOrRemoveBasicAuth implements Flushable
         @chmod($this->htpasswdPath, 0640);
 
         $this->logMessage('.htpasswd file created.');
+
+        if ($passwordMissing) {
+            throw new \RuntimeException(PHP_EOL . PHP_EOL . 'Please set SS_BASIC_AUTH_PASSWORD in your .env file. Until then the site is locked for everyone (random password).' . PHP_EOL);
+        }
     }
 
     private function deleteHtpasswdFile(): void
@@ -426,6 +454,33 @@ class AddOrRemoveBasicAuth implements Flushable
         }
     }
 
+    private function updateSharedSecretInHtaccessFiles(): void
+    {
+        foreach ($this->htaccessPaths as $htaccessPath) {
+            $data = file_exists($htaccessPath) ? (string) file_get_contents($htaccessPath) : '';
+            if ($data === '') {
+                continue;
+            }
+            if (!str_contains($data, self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER)) {
+                continue;
+            }
+            $newData = str_replace(
+                self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER,
+                $this->buildSecretDirectiveLines(),
+                $data
+            );
+            if ($newData === $data) {
+                continue;
+            }
+            $result = @file_put_contents($htaccessPath, $newData, LOCK_EX);
+            if ($result === false) {
+                user_error('BasicAuth could not update shared secret in: ' . $htaccessPath, E_USER_WARNING);
+                continue;
+            }
+            $this->logMessage('BasicAuth updated shared secret in: ' . $htaccessPath);
+        }
+    }
+
     /**
      * @return array<int, string>
      */
@@ -460,6 +515,7 @@ class AddOrRemoveBasicAuth implements Flushable
             fn (string $host): string => $this->normaliseHost($host)
         );
 
+        $sharedSecretLines = $this->buildSecretDirectiveLines();
         $devExclusionsRegex = $this->buildSuffixRegexForRewriteCond($devExclusions);
         $legitSitesRegex = $this->buildExactHostsRegex($legitHosts);
 
@@ -494,27 +550,21 @@ class AddOrRemoveBasicAuth implements Flushable
             }
 
             if ($trimmed === self::ADD_HOSTS_MARKER) {
-                $excludedHosts[] = $this->wwwVsNonWww($liveSiteHost);
-                foreach ($excludedHosts as $host) {
-                    // Escape the hostname for regex (e.g., turns '.' into '\.')
-                    $safeHostRegex = preg_quote(strtolower($host), '/');
-
-                    // Match the host exactly from the start (^), allowing an optional port number at the end
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /^' . $safeHostRegex . '(:[0-9]+)?$/i';
+                // NEVER authorise based on the Host header: it can be forged by anyone.
+                // 1. no .htpasswd file means that this server is not protected (e.g. live, dev): decided by the server, not by the visitor.
+                if (! preg_match('#^[A-Za-z0-9_./\-]+$#', $this->htpasswdPath)) {
+                    throw new \RuntimeException('The .htpasswd path contains unsupported characters: ' . $this->htpasswdPath);
                 }
 
-                foreach ($devExclusions as $suffix) {
-                    // Escape the suffix for regex
-                    $safeSuffixRegex = preg_quote(strtolower($suffix), '/');
-
-                    // Match the suffix at the end of the domain, allowing an optional port number at the end
-                    $outputLines[] = '  Require expr %{HTTP_HOST} =~ /' . $safeSuffixRegex . '(:[0-9]+)?$/i';
-                }
-
+                $outputLines[] = "  # No login required if there is no .htpasswd file (this site is not protected)";
+                $outputLines[] = "  Require expr ! -f '" . $this->htpasswdPath . "'";
+                // 2. client address based exclusions
+                $outputLines[] = '  # No login required for these client addresses';
+                $outputLines[] = '  Require ip ' . implode(' ', $this->getExcludedIps());
                 continue;
             }
 
-            $lineString = str_replace(self::SHARED_SECRET_MARKER, $this->buildSecretDirectiveLines(), $lineString);
+            $lineString = str_replace(self::SHARED_SECRET_MARKER, $sharedSecretLines, $lineString);
             $lineString = str_replace(self::DEV_EXCLUSIONS_MARKER, $devExclusionsRegex, $lineString);
             $lineString = str_replace(self::LIST_OF_LEGIT_SITES_MARKER, $legitSitesRegex, $lineString);
             $lineString = str_replace(self::LIVE_SITE_HOST_MARKER, $liveSiteHost, $lineString);
@@ -526,6 +576,29 @@ class AddOrRemoveBasicAuth implements Flushable
         $this->assertNoMarkersRemain($outputLines);
 
         return $outputLines;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function getExcludedIps(): array
+    {
+        $ips = ['127.0.0.1', '::1'];
+        if (Director::isDev() && (bool) $this->config()->get('excluded_from_basic_auth_private_ranges_in_dev')) {
+            $ips = array_merge($ips, ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);
+        }
+
+        foreach ((array) $this->config()->get('excluded_from_basic_auth_ips') as $ip) {
+            $ip = trim((string) $ip);
+            $address = explode('/', $ip, 2)[0];
+            if ($ip !== '' && filter_var($address, FILTER_VALIDATE_IP)) {
+                $ips[] = $ip;
+            } elseif ($ip !== '') {
+                user_error('Invalid IP address in excluded_from_basic_auth_ips: ' . $ip, E_USER_WARNING);
+            }
+        }
+
+        return array_values(array_unique($ips));
     }
 
     /**
@@ -627,37 +700,73 @@ class AddOrRemoveBasicAuth implements Flushable
 
     private function buildSecretDirectiveLines(): string
     {
-        $this->sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
-        $this->sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
-        if (!$this->sharedSecretValue) {
-            return '# No shared secret configured.';
+        if (Director::isDev()) {
+            return self::SHARED_SECRET_DIRECTIVE_PLACEHOLDER;
         }
-        $this->validateSharedSecret();
+
+        $sharedSecretHeader = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_HEADER]) ?: self::DEFAULT_SHARED_SECRET_HEADER;
+        $sharedSecretValue = $this->firstEnvValue([self::ENV_SS_SHARED_SECRET_VALUE]);
+
+        if (!$sharedSecretValue) {
+            return self::SHARED_SECRET_DIRECTIVE_NOT_SET;
+        }
+
+        $whitelistedIPs = Config::inst()->get(self::class, 'shared_secret_whitelisted_ips') ?? [];
+        $whitelistedIPs = array_filter(array_map('trim', $whitelistedIPs));
+
+        $this->validateSharedSecret($sharedSecretHeader, $sharedSecretValue, $whitelistedIPs);
+
         return implode(
             PHP_EOL,
             [
-                "<IfModule mod_headers.c>",
-                "  <If \"%{HTTP:X-Origin-Secret} != '{$this->sharedSecretValue}'\">",
-                "    Require all denied",
-                "  </If>",
+                "<IfModule mod_rewrite.c>",
+                "  RewriteEngine On",
+                "",
+                "  # Check secret header",
+                "  RewriteCond %{HTTP:{$sharedSecretHeader}} !={$sharedSecretValue}",
+                ...$this->buildRewriteCondForWhitelistedIPs($whitelistedIPs),
+                "",
+                "  # Deny access",
+                "  RewriteRule ^ - [F]",
                 "</IfModule>",
             ]
         );
     }
 
-    private function validateSharedSecret(): void
+    private function buildRewriteCondForWhitelistedIPs(array $whitelistedIPs): array
     {
-        if (!str_starts_with($this->sharedSecretHeader, 'X-')) {
+        if ($whitelistedIPs === []) {
+            return [];
+        }
+
+        $this->logMessage('Shared secret is enabled with whitelisted IPs: ' . implode(', ', $whitelistedIPs));
+
+        $address = count($whitelistedIPs) === 1 ? 'address' : 'addresses';
+        $conditions = ["", "  # White-list IP $address"];
+        foreach ($whitelistedIPs as $ip) {
+            $conditions[] = "  RewriteCond %{REMOTE_ADDR} !={$ip}";
+        }
+        return $conditions;
+    }
+
+    private function validateSharedSecret(string $sharedSecretHeader, string $sharedSecretValue, array $whitelistedIPs): void
+    {
+        if (!str_starts_with($sharedSecretHeader, 'X-')) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must start with X-');
         }
-        if (!preg_match('/^[a-zA-Z0-9-]+$/', $this->sharedSecretHeader)) {
+        if (!preg_match('/^[a-zA-Z0-9-]+$/', $sharedSecretHeader)) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_HEADER . ' must be alphanumeric and dashes i.e. a-z, A-Z, 0-9, - and MUST NOT contains symbols or spaces');
         }
-        if (strlen($this->sharedSecretValue) < 25) {
+        if (strlen($sharedSecretValue) < 25) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' needs to be at least 25 characters long');
         }
-        if (!preg_match('/^[a-zA-Z0-9]+$/', $this->sharedSecretValue)) {
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $sharedSecretValue)) {
             throw new \RuntimeException(self::ENV_SS_SHARED_SECRET_VALUE . ' must be alphanumeric i.e. a-z, A-Z, 0-9 and MUST NOT contains symbols or spaces');
+        }
+        foreach ($whitelistedIPs as $ip) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+                throw new \RuntimeException('Invalid IP address in shared_secret_whitelisted_ips: ' . $ip);
+            }
         }
     }
 
